@@ -10,6 +10,10 @@ class ConfigStore(context: Context) {
     private val appContext = context.applicationContext
     private val prefs: SharedPreferences = createPrefs(appContext)
 
+    init {
+        migratePresetMapping()
+    }
+
     fun load(): AppConfig {
         return AppConfig(
             smpHost = prefs.getString(KEY_SMP_HOST, "") ?: "",
@@ -38,6 +42,7 @@ class ConfigStore(context: Context) {
             .putInt(KEY_ENGLISH_PRESET, config.englishPreset)
             .putInt(KEY_MANDARIN_PRESET, config.mandarinPreset)
             .putInt(KEY_POLL_INTERVAL_SECONDS, config.pollIntervalSeconds)
+            .putInt(KEY_CONFIG_VERSION, CURRENT_CONFIG_VERSION)
             .apply()
     }
 
@@ -66,8 +71,30 @@ class ConfigStore(context: Context) {
             .replace("\r", "\\r")
     }
 
+    private fun migratePresetMapping() {
+        if (prefs.getInt(KEY_CONFIG_VERSION, 1) >= CURRENT_CONFIG_VERSION) {
+            return
+        }
+
+        val editor = prefs.edit()
+        val englishPreset = prefs.getInt(KEY_ENGLISH_PRESET, OLD_DEFAULT_ENGLISH_PRESET)
+        val mandarinPreset = prefs.getInt(KEY_MANDARIN_PRESET, OLD_DEFAULT_MANDARIN_PRESET)
+        if (
+            prefs.contains(KEY_ENGLISH_PRESET) &&
+            prefs.contains(KEY_MANDARIN_PRESET) &&
+            englishPreset == OLD_DEFAULT_ENGLISH_PRESET &&
+            mandarinPreset == OLD_DEFAULT_MANDARIN_PRESET
+        ) {
+            editor
+                .putInt(KEY_ENGLISH_PRESET, AppConfig.DEFAULT_ENGLISH_PRESET)
+                .putInt(KEY_MANDARIN_PRESET, AppConfig.DEFAULT_MANDARIN_PRESET)
+        }
+        editor.putInt(KEY_CONFIG_VERSION, CURRENT_CONFIG_VERSION).commit()
+    }
+
     companion object {
         private const val PREFS_FILE = "streaming_secure_prefs"
+        private const val KEY_CONFIG_VERSION = "config_version"
         private const val KEY_SMP_HOST = "smp_host"
         private const val KEY_SMP_SSH_PORT = "smp_ssh_port"
         private const val KEY_SMP_USERNAME = "smp_username"
@@ -77,6 +104,9 @@ class ConfigStore(context: Context) {
         private const val KEY_ENGLISH_PRESET = "english_preset"
         private const val KEY_MANDARIN_PRESET = "mandarin_preset"
         private const val KEY_POLL_INTERVAL_SECONDS = "poll_interval_seconds"
+        private const val CURRENT_CONFIG_VERSION = 2
+        private const val OLD_DEFAULT_ENGLISH_PRESET = 1
+        private const val OLD_DEFAULT_MANDARIN_PRESET = 2
 
         private fun createPrefs(context: Context): SharedPreferences {
             val masterKey = MasterKey.Builder(context)

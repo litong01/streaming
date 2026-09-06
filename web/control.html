@@ -47,6 +47,7 @@
     }
     .status-value { font-size: 28px; line-height: 1.2; }
     .status-error { font-size: 14px; color: #f28b82; min-height: 18px; }
+    .status.unreachable { border: 1px solid #f28b82; }
     .choices { display: grid; gap: 16px; }
     .choice {
       border: 1px solid var(--ring);
@@ -101,6 +102,7 @@
   <script>
     const statusValue = document.getElementById("statusValue");
     const statusError = document.getElementById("statusError");
+    const statusPanel = document.querySelector(".status");
     const englishButton = document.getElementById("englishButton");
     const mandarinButton = document.getElementById("mandarinButton");
     const stopButton = document.getElementById("stopButton");
@@ -111,17 +113,28 @@
       mandarinButton.classList.toggle("active", stream === "mandarin");
     }
 
+    function applyState(data) {
+      const reachable = Boolean(data.smpReachable);
+      statusValue.textContent = data.statusMessage || "Idle";
+      statusError.textContent = data.lastError || "";
+      statusPanel.classList.toggle("unreachable", !reachable);
+      setActive(data.activeStream);
+      englishButton.disabled = busy || !reachable;
+      mandarinButton.disabled = busy || !reachable;
+      stopButton.disabled = busy || !reachable || !data.streamEnabled;
+    }
+
     async function refreshStatus() {
       try {
         const response = await fetch("/api/status", { cache: "no-store" });
         const data = await response.json();
-        statusValue.textContent = data.statusMessage || "Idle";
-        statusError.textContent = data.lastError || "";
-        setActive(data.activeStream);
-        stopButton.disabled = !data.streamEnabled || busy;
+        applyState(data);
       } catch (error) {
         statusValue.textContent = "Server unavailable";
         statusError.textContent = String(error);
+        statusPanel.classList.add("unreachable");
+        englishButton.disabled = true;
+        mandarinButton.disabled = true;
         stopButton.disabled = true;
       }
     }
@@ -135,15 +148,13 @@
       try {
         const response = await fetch(path, { method: "POST" });
         const data = await response.json();
-        statusValue.textContent = data.statusMessage || "Updated";
-        statusError.textContent = data.lastError || "";
-        setActive(data.activeStream);
+        applyState(data);
       } catch (error) {
+        statusValue.textContent = "SMP is not reachable";
         statusError.textContent = String(error);
+        statusPanel.classList.add("unreachable");
       } finally {
         busy = false;
-        englishButton.disabled = false;
-        mandarinButton.disabled = false;
         await refreshStatus();
       }
     }

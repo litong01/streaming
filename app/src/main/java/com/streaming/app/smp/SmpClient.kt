@@ -66,11 +66,12 @@ class SmpClient {
                 streamEnabled = streamEnabled,
                 activePreset = activePreset,
                 statusMessage = statusMessage,
+                smpReachable = true,
             )
         } catch (error: Exception) {
             Log.w(TAG, "Failed to query SMP state", error)
             StreamState(
-                statusMessage = "Unable to reach SMP",
+                statusMessage = "SMP is not reachable",
                 lastError = error.message ?: error.javaClass.simpleName,
             )
         }

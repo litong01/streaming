@@ -12,12 +12,14 @@ const (
 	DefaultSmpSSHPort          = 22023
 	DefaultHTTPPort            = 8080
 	DefaultStreamIndex         = 1
-	DefaultEnglishPreset       = 1
-	DefaultMandarinPreset      = 2
+	DefaultEnglishPreset       = 2
+	DefaultMandarinPreset      = 1
 	DefaultPollIntervalSeconds = 3
+	CurrentSchemaVersion       = 2
 )
 
 type Config struct {
+	SchemaVersion       int    `json:"schemaVersion"`
 	SmpHost             string `json:"smpHost"`
 	SmpSSHPort          int    `json:"smpSshPort"`
 	SmpUsername         string `json:"smpUsername"`
@@ -50,6 +52,7 @@ type Store struct {
 
 func Default() Config {
 	return Config{
+		SchemaVersion:       CurrentSchemaVersion,
 		SmpSSHPort:          DefaultSmpSSHPort,
 		HTTPPort:            DefaultHTTPPort,
 		StreamIndex:         DefaultStreamIndex,
@@ -85,10 +88,18 @@ func Load(path string) (*Store, error) {
 		}
 		return nil, err
 	}
-	if err := json.Unmarshal(data, &store.cfg); err != nil {
+	var loaded Config
+	if err := json.Unmarshal(data, &loaded); err != nil {
 		return nil, err
 	}
+	store.cfg = loaded
+	needsSave := migratePresetMapping(&store.cfg)
 	store.cfg = withDefaults(store.cfg)
+	if needsSave {
+		if err := store.saveLocked(); err != nil {
+			return nil, err
+		}
+	}
 	return store, nil
 }
 
@@ -141,6 +152,9 @@ func (s *Store) saveLocked() error {
 }
 
 func withDefaults(cfg Config) Config {
+	if cfg.SchemaVersion == 0 {
+		cfg.SchemaVersion = CurrentSchemaVersion
+	}
 	if cfg.SmpSSHPort == 0 {
 		cfg.SmpSSHPort = DefaultSmpSSHPort
 	}
@@ -160,4 +174,16 @@ func withDefaults(cfg Config) Config {
 		cfg.PollIntervalSeconds = DefaultPollIntervalSeconds
 	}
 	return cfg
+}
+
+func migratePresetMapping(cfg *Config) bool {
+	if cfg.SchemaVersion >= CurrentSchemaVersion {
+		return false
+	}
+	if cfg.EnglishPreset == 1 && cfg.MandarinPreset == 2 {
+		cfg.EnglishPreset = DefaultEnglishPreset
+		cfg.MandarinPreset = DefaultMandarinPreset
+	}
+	cfg.SchemaVersion = CurrentSchemaVersion
+	return true
 }

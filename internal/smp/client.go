@@ -39,6 +39,7 @@ type State struct {
 	ActivePreset     *int         `json:"activePreset"`
 	StatusMessage    string       `json:"statusMessage"`
 	LastError        *string      `json:"lastError"`
+	SmpReachable     bool         `json:"smpReachable"`
 	QueriedAtEpochMs int64        `json:"queriedAtEpochMs"`
 }
 
@@ -55,11 +56,11 @@ func (c *Client) QueryState(cfg config.Config) State {
 
 	enabled, err := c.queryStreamEnabled(cfg)
 	if err != nil {
-		return failed("Unable to reach SMP", err)
+		return failed("SMP is not reachable", err)
 	}
 	preset, err := c.queryActiveStreamingPreset(cfg)
 	if err != nil {
-		return failed("Unable to reach SMP", err)
+		return failed("SMP is not reachable", err)
 	}
 
 	active := ActiveNone
@@ -84,6 +85,7 @@ func (c *Client) QueryState(cfg config.Config) State {
 		StreamEnabled:    enabled,
 		ActivePreset:     preset,
 		StatusMessage:    status,
+		SmpReachable:     true,
 		QueriedAtEpochMs: time.Now().UnixMilli(),
 	}
 }

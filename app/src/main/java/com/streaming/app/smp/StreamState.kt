@@ -12,6 +12,7 @@ data class StreamState(
     val activePreset: Int? = null,
     val statusMessage: String = "Idle",
     val lastError: String? = null,
+    val smpReachable: Boolean = false,
     val queriedAtEpochMs: Long = System.currentTimeMillis(),
 ) {
     fun toJson(): String {
@@ -24,6 +25,7 @@ data class StreamState(
               "activePreset": $presetValue,
               "statusMessage": "${escapeJson(statusMessage)}",
               "lastError": $errorValue,
+              "smpReachable": $smpReachable,
               "queriedAtEpochMs": $queriedAtEpochMs
             }
         """.trimIndent()

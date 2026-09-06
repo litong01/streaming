@@ -61,6 +61,9 @@ object WebPages {
               color: #f28b82;
               min-height: 18px;
             }
+            .status.unreachable {
+              border: 1px solid #f28b82;
+            }
             .choices {
               display: grid;
               gap: 16px;
@@ -130,6 +133,7 @@ object WebPages {
           <script>
             const statusValue = document.getElementById("statusValue");
             const statusError = document.getElementById("statusError");
+            const statusPanel = document.querySelector(".status");
             const englishButton = document.getElementById("englishButton");
             const mandarinButton = document.getElementById("mandarinButton");
             const stopButton = document.getElementById("stopButton");
@@ -141,18 +145,28 @@ object WebPages {
               mandarinButton.classList.toggle("active", stream === "mandarin");
             }
 
+            function applyState(data) {
+              const reachable = Boolean(data.smpReachable);
+              statusValue.textContent = data.statusMessage || "Idle";
+              statusError.textContent = data.lastError || "";
+              statusPanel.classList.toggle("unreachable", !reachable);
+              setActive(data.activeStream);
+              englishButton.disabled = busy || !reachable;
+              mandarinButton.disabled = busy || !reachable;
+              stopButton.disabled = busy || !reachable || !data.streamEnabled;
+            }
+
             async function refreshStatus() {
               try {
                 const response = await fetch("/api/status", { cache: "no-store" });
                 const data = await response.json();
-                statusValue.textContent = data.statusMessage || "Idle";
-                statusError.textContent = data.lastError || "";
-                setActive(data.activeStream);
-                const streaming = Boolean(data.streamEnabled);
-                stopButton.disabled = !streaming || busy;
+                applyState(data);
               } catch (error) {
                 statusValue.textContent = "Server unavailable";
                 statusError.textContent = String(error);
+                statusPanel.classList.add("unreachable");
+                englishButton.disabled = true;
+                mandarinButton.disabled = true;
                 stopButton.disabled = true;
               }
             }
@@ -166,15 +180,13 @@ object WebPages {
               try {
                 const response = await fetch(path, { method: "POST" });
                 const data = await response.json();
-                statusValue.textContent = data.statusMessage || "Updated";
-                statusError.textContent = data.lastError || "";
-                setActive(data.activeStream);
+                applyState(data);
               } catch (error) {
+                statusValue.textContent = "SMP is not reachable";
                 statusError.textContent = String(error);
+                statusPanel.classList.add("unreachable");
               } finally {
                 busy = false;
-                englishButton.disabled = false;
-                mandarinButton.disabled = false;
                 await refreshStatus();
               }
             }
@@ -357,8 +369,8 @@ object WebPages {
               document.getElementById("smpUsername").value = data.smpUsername || "";
               document.getElementById("httpPort").value = data.httpPort || 8080;
               document.getElementById("streamIndex").value = data.streamIndex || 1;
-              document.getElementById("englishPreset").value = data.englishPreset || 1;
-              document.getElementById("mandarinPreset").value = data.mandarinPreset || 2;
+              document.getElementById("englishPreset").value = data.englishPreset || 2;
+              document.getElementById("mandarinPreset").value = data.mandarinPreset || 1;
             }
 
             form.addEventListener("submit", async (event) => {

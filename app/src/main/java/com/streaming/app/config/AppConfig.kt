@@ -18,8 +18,8 @@ data class AppConfig(
         const val DEFAULT_SMP_SSH_PORT = 22023
         const val DEFAULT_HTTP_PORT = 8080
         const val DEFAULT_STREAM_INDEX = 1
-        const val DEFAULT_ENGLISH_PRESET = 1
-        const val DEFAULT_MANDARIN_PRESET = 2
+        const val DEFAULT_ENGLISH_PRESET = 2
+        const val DEFAULT_MANDARIN_PRESET = 1
         const val DEFAULT_POLL_INTERVAL_SECONDS = 3
     }
 }

@@ -12,7 +12,7 @@ contains an Android app for the tablet and an optional standalone Go server.
 - Credentials are encrypted and stored only on the Android device.
 - Fully Kiosk Browser uses `http://127.0.0.1:8080/` for daily operation.
 - The server starts again after tablet reboot.
-- Preset 1 is English and preset 2 is Mandarin by default. Both presets must
+- Preset 1 is Mandarin and preset 2 is English by default. Both presets must
   already be configured through the native SMP web interface.
 
 The Android source is Kotlin, but no Java or Android tooling is required on
