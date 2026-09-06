@@ -18,21 +18,19 @@ contains an Android app for the tablet and an optional standalone Go server.
 The Android source is Kotlin, but no Java or Android tooling is required on
 your Mac. GitHub Actions performs the Android build.
 
-## Build the APK with GitHub Actions
+## Build and download the APK
 
-1. Push this repository to GitHub.
-2. Open the repository's **Actions** tab.
-3. Select **Build Android APK**.
-4. Choose **Run workflow**.
-5. When it finishes, open the run and download the
-   `streaming-debug-apk` artifact.
-6. Extract and install `app-debug.apk` on the tablet.
+GitHub Actions builds the APK and publishes it as a GitHub Release. No Java or
+Android SDK is needed on your Mac.
 
-The workflow also runs automatically when Android files are pushed to `main`.
-Its JDK and Android SDK exist only on the GitHub runner.
+1. Push this repository to GitHub, or run **Actions → Build Android APK**.
+2. When the workflow succeeds, open **Releases**.
+3. Download `streaming-debug.apk` from the latest release.
+4. Install that APK on the tablet.
 
-The debug APK is installable directly. A future Play Store release will need a
-release signing key stored as GitHub Actions secrets.
+Each successful `main` build or manual workflow run creates a new release tagged
+`apk-<run number>`. Pull requests only upload a workflow artifact; they do not
+create a release.
 
 ## Using the app
 

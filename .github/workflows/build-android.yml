@@ -24,7 +24,7 @@ on:
       - ".github/workflows/build-android.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   apk:
@@ -34,6 +34,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK for Android build
         uses: actions/setup-java@v4
@@ -53,10 +55,30 @@ jobs:
       - name: Build installable debug APK
         run: ./gradlew --no-daemon assembleDebug
 
-      - name: Upload APK
+      - name: Name the APK for download
+        run: cp app/build/outputs/apk/debug/app-debug.apk streaming-debug.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: streaming-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: streaming-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: Streaming APK ${{ github.run_number }}
+          files: streaming-debug.apk
+          generate_release_notes: true
+          make_latest: true
+          draft: false
+          prerelease: false
+          body: |
+            Debug APK for tablet install.
+
+            Install `streaming-debug.apk`, tap the Streaming icon to configure
+            the SMP, then point Fully Kiosk Browser at `http://127.0.0.1:8080/`.
