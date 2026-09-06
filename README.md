@@ -8,7 +8,7 @@ contains an Android app for the tablet and an optional standalone Go server.
 - Tapping the Streaming app icon starts the foreground web server and opens its
   configuration page inside the app.
 - The configuration page collects the SMP address, SSH credentials, server
-  port, stream index, and preset numbers.
+  port, and preset numbers.
 - Credentials are encrypted and stored only on the Android device.
 - Fully Kiosk Browser uses `http://127.0.0.1:8080/` for daily operation.
 - The server starts again after tablet reboot.
@@ -17,6 +17,13 @@ contains an Android app for the tablet and an optional standalone Go server.
 
 The Android source is Kotlin, but no Java or Android tooling is required on
 your Mac. GitHub Actions performs the Android build.
+
+## Web pages
+
+Both servers serve the same two pages from `web/`. The control page follows the
+myconsole launcher look used by Fully Kiosk Browser: clock, date, and round
+tiles for English, Mandarin, and Stop. The Go server embeds these files, and the
+Gradle build packages them as Android assets, so an edit in `web/` changes both.
 
 ## Build and download the APK
 
@@ -37,8 +44,9 @@ create a release.
 1. Install and tap the Streaming icon.
 2. Grant notification permission so Android can show the server's persistent
    foreground-service notification.
-3. Enter the SMP hostname/IP, SSH port (default `22023`), username, password,
-   and the local server port (default `8080`).
+3. Enter the SMP address (`host` or `host:22023`), username, password,
+   and the local server port (default `8080`). The SSH port is `22023`
+   unless you include a different one after the colon.
 4. Save the configuration.
 5. Point Fully Kiosk Browser at `http://127.0.0.1:8080/`.
 
@@ -61,12 +69,13 @@ the `STREAMING_CONFIG` environment variable.
 
 ## SMP commands
 
-For stream index `N` and preset `P`:
+For stream 1 (Archive Ch A) and preset `P`:
 
-- Recall streaming preset: `3*N*P.`
-- Enable stream: `E N*1 STRC}`
-- Disable stream: `E N*0 STRC}`
-- Query stream enabled: `E N)STRC}`
-- Query selected streaming preset: `46I`, `47I`, or `48I`
+- Recall streaming preset: `3*1*P.`
+- Enable stream: `E 1*1 STRC}`
+- Disable stream: `E 1*0 STRC}`
+- Query stream enabled: `E 1)STRC}`
+- Query selected streaming preset: `46I`
 
-The default stream index is `1` (Archive Ch A).
+The app always controls Archive Channel A. That is the encoder used for the
+YouTube live push.

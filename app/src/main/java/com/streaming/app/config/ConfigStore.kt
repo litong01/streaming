@@ -21,7 +21,7 @@ class ConfigStore(context: Context) {
             smpUsername = prefs.getString(KEY_SMP_USERNAME, "") ?: "",
             smpPassword = prefs.getString(KEY_SMP_PASSWORD, "") ?: "",
             httpPort = prefs.getInt(KEY_HTTP_PORT, AppConfig.DEFAULT_HTTP_PORT),
-            streamIndex = prefs.getInt(KEY_STREAM_INDEX, AppConfig.DEFAULT_STREAM_INDEX),
+            streamIndex = AppConfig.DEFAULT_STREAM_INDEX,
             englishPreset = prefs.getInt(KEY_ENGLISH_PRESET, AppConfig.DEFAULT_ENGLISH_PRESET),
             mandarinPreset = prefs.getInt(KEY_MANDARIN_PRESET, AppConfig.DEFAULT_MANDARIN_PRESET),
             pollIntervalSeconds = prefs.getInt(
@@ -38,7 +38,7 @@ class ConfigStore(context: Context) {
             .putString(KEY_SMP_USERNAME, config.smpUsername.trim())
             .putString(KEY_SMP_PASSWORD, config.smpPassword)
             .putInt(KEY_HTTP_PORT, config.httpPort)
-            .putInt(KEY_STREAM_INDEX, config.streamIndex)
+            .putInt(KEY_STREAM_INDEX, AppConfig.DEFAULT_STREAM_INDEX)
             .putInt(KEY_ENGLISH_PRESET, config.englishPreset)
             .putInt(KEY_MANDARIN_PRESET, config.mandarinPreset)
             .putInt(KEY_POLL_INTERVAL_SECONDS, config.pollIntervalSeconds)
@@ -54,7 +54,6 @@ class ConfigStore(context: Context) {
               "smpUsername": "${escapeJson(config.smpUsername)}",
               "hasPassword": ${config.smpPassword.isNotEmpty()},
               "httpPort": ${config.httpPort},
-              "streamIndex": ${config.streamIndex},
               "englishPreset": ${config.englishPreset},
               "mandarinPreset": ${config.mandarinPreset},
               "pollIntervalSeconds": ${config.pollIntervalSeconds},

@@ -73,3 +73,70 @@ func TestLoadPreservesCustomPresetMapping(t *testing.T) {
 		)
 	}
 }
+
+func TestLoadForcesArchiveChannelA(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	oldConfig := []byte(`{"streamIndex": 2}`)
+	if err := os.WriteFile(path, oldConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Get().StreamIndex; got != DefaultStreamIndex {
+		t.Fatalf("stream index = %d, want %d", got, DefaultStreamIndex)
+	}
+}
+
+func TestParseHostPort(t *testing.T) {
+	tests := []struct {
+		address string
+		port    int
+		host    string
+		want    int
+	}{
+		{"192.0.2.10", 0, "192.0.2.10", DefaultSmpSSHPort},
+		{"192.0.2.10:22024", 0, "192.0.2.10", 22024},
+		{"smp.local", 22023, "smp.local", 22023},
+		{"[2001:db8::1]:22023", 0, "2001:db8::1", 22023},
+	}
+	for _, test := range tests {
+		host, port, err := ParseHostPort(test.address, test.port)
+		if err != nil {
+			t.Fatalf("%q: %v", test.address, err)
+		}
+		if host != test.host || port != test.want {
+			t.Fatalf("%q => %s:%d, want %s:%d", test.address, host, port, test.host, test.want)
+		}
+	}
+}
+
+func TestParseHostPortRejectsURLAndSpaces(t *testing.T) {
+	for _, address := range []string{"http://192.0.2.10", "192.0.2.10 1", ""} {
+		if _, _, err := ParseHostPort(address, 0); err == nil {
+			t.Fatalf("expected error for %q", address)
+		}
+	}
+}
+
+func TestValidateRejectsSamePresetsAndLowHTTPPort(t *testing.T) {
+	cfg := Default()
+	cfg.SmpHost = "192.0.2.10"
+	cfg.SmpUsername = "admin"
+	cfg.EnglishPreset = 1
+	cfg.MandarinPreset = 1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected preset collision error")
+	}
+	cfg.MandarinPreset = 2
+	cfg.HTTPPort = 80
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected HTTP port error")
+	}
+	cfg.HTTPPort = DefaultHTTPPort
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

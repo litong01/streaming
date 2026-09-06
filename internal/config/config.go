@@ -37,7 +37,6 @@ type PublicConfig struct {
 	SmpUsername         string `json:"smpUsername"`
 	HasPassword         bool   `json:"hasPassword"`
 	HTTPPort            int    `json:"httpPort"`
-	StreamIndex         int    `json:"streamIndex"`
 	EnglishPreset       int    `json:"englishPreset"`
 	MandarinPreset      int    `json:"mandarinPreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
@@ -124,7 +123,6 @@ func (s *Store) Public() PublicConfig {
 		SmpUsername:         cfg.SmpUsername,
 		HasPassword:         cfg.SmpPassword != "",
 		HTTPPort:            cfg.HTTPPort,
-		StreamIndex:         cfg.StreamIndex,
 		EnglishPreset:       cfg.EnglishPreset,
 		MandarinPreset:      cfg.MandarinPreset,
 		PollIntervalSeconds: cfg.PollIntervalSeconds,
@@ -161,9 +159,7 @@ func withDefaults(cfg Config) Config {
 	if cfg.HTTPPort == 0 {
 		cfg.HTTPPort = DefaultHTTPPort
 	}
-	if cfg.StreamIndex == 0 {
-		cfg.StreamIndex = DefaultStreamIndex
-	}
+	cfg.StreamIndex = DefaultStreamIndex
 	if cfg.EnglishPreset == 0 {
 		cfg.EnglishPreset = DefaultEnglishPreset
 	}

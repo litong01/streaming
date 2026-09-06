@@ -10,12 +10,14 @@ import org.json.JSONObject
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 class StreamingHttpServer(
     port: Int,
     private val configStore: ConfigStore,
     private val smpClient: SmpClient,
+    private val pages: WebPages,
     private val onConfigSaved: (AppConfig) -> Unit,
     initialState: StreamState,
 ) : NanoHTTPD(port) {
@@ -35,8 +37,8 @@ class StreamingHttpServer(
 
         return try {
             when {
-                method == Method.GET && uri == "/" -> htmlResponse(WebPages.controlPage())
-                method == Method.GET && uri == "/config" -> htmlResponse(WebPages.configPage())
+                method == Method.GET && uri == "/" -> htmlResponse(pages.controlPage())
+                method == Method.GET && uri == "/config" -> htmlResponse(pages.configPage())
                 method == Method.GET && uri == "/api/status" -> jsonResponse(currentState.get().toJson())
                 method == Method.GET && uri == "/api/config" -> {
                     val config = configStore.load()
@@ -75,21 +77,21 @@ class StreamingHttpServer(
         val json = JSONObject(body)
         val existing = configStore.load()
         val password = json.optString("smpPassword", "")
-        val config = AppConfig(
+        val candidate = AppConfig(
             smpHost = json.optString("smpHost", existing.smpHost),
             smpSshPort = json.optInt("smpSshPort", existing.smpSshPort),
             smpUsername = json.optString("smpUsername", existing.smpUsername),
             smpPassword = if (password.isNotEmpty()) password else existing.smpPassword,
             httpPort = json.optInt("httpPort", existing.httpPort),
-            streamIndex = json.optInt("streamIndex", existing.streamIndex),
+            streamIndex = AppConfig.DEFAULT_STREAM_INDEX,
             englishPreset = json.optInt("englishPreset", existing.englishPreset),
             mandarinPreset = json.optInt("mandarinPreset", existing.mandarinPreset),
             pollIntervalSeconds = existing.pollIntervalSeconds,
         )
-
-        if (config.smpHost.isBlank() || config.smpUsername.isBlank()) {
+        val (config, error) = candidate.validated()
+        if (error != null) {
             return jsonResponse(
-                """{"error":"SMP host and username are required"}""",
+                """{"error":"${escapeJson(error)}"}""",
                 Response.Status.BAD_REQUEST,
             )
         }
@@ -101,7 +103,14 @@ class StreamingHttpServer(
 
     private fun runSmpAction(action: (AppConfig) -> StreamState): Response {
         val config = configStore.load()
-        val state = worker.submit(Callable { action(config) }).get()
+        val state = try {
+            worker.submit(Callable { action(config) }).get(20, TimeUnit.SECONDS)
+        } catch (error: TimeoutException) {
+            StreamState(
+                statusMessage = "SMP is not reachable",
+                lastError = "timed out waiting for SMP",
+            )
+        }
         currentState.set(state)
         return jsonResponse(state.toJson())
     }

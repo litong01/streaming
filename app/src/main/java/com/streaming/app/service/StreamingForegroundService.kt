@@ -15,6 +15,7 @@ import com.streaming.app.R
 import com.streaming.app.StreamingApplication
 import com.streaming.app.config.AppConfig
 import com.streaming.app.server.StreamingHttpServer
+import com.streaming.app.server.WebPages
 import com.streaming.app.smp.StreamState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +67,7 @@ class StreamingForegroundService : Service() {
             port = config.httpPort,
             configStore = app.configStore,
             smpClient = app.smpClient,
+            pages = WebPages(assets),
             onConfigSaved = { updatedConfig ->
                 serviceScope.launch {
                     // Let the configuration response reach the WebView before

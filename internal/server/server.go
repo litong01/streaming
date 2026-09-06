@@ -199,7 +199,6 @@ type configPayload struct {
 	SmpUsername    string `json:"smpUsername"`
 	SmpPassword    string `json:"smpPassword"`
 	HTTPPort       int    `json:"httpPort"`
-	StreamIndex    int    `json:"streamIndex"`
 	EnglishPreset  int    `json:"englishPreset"`
 	MandarinPreset int    `json:"mandarinPreset"`
 }
@@ -215,23 +214,30 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
-	if strings.TrimSpace(payload.SmpHost) == "" || strings.TrimSpace(payload.SmpUsername) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "SMP host and username are required"})
-		return
-	}
-
 	current := s.store.Get()
 	next := current
-	next.SmpHost = strings.TrimSpace(payload.SmpHost)
-	next.SmpSSHPort = payload.SmpSSHPort
+	host, sshPort, err := config.ParseHostPort(payload.SmpHost, payload.SmpSSHPort)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	next.SmpHost = host
+	next.SmpSSHPort = sshPort
 	next.SmpUsername = strings.TrimSpace(payload.SmpUsername)
 	if payload.SmpPassword != "" {
 		next.SmpPassword = payload.SmpPassword
 	}
 	next.HTTPPort = payload.HTTPPort
-	next.StreamIndex = payload.StreamIndex
+	if next.HTTPPort == 0 {
+		next.HTTPPort = config.DefaultHTTPPort
+	}
+	next.StreamIndex = config.DefaultStreamIndex
 	next.EnglishPreset = payload.EnglishPreset
 	next.MandarinPreset = payload.MandarinPreset
+	if err := next.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	if err := s.store.Save(next); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

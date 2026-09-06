@@ -37,6 +37,14 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    // The served pages live in the repository's web directory, shared with the
+    // standalone Go server, and ship in the APK as assets.
+    sourceSets {
+        getByName("main") {
+            assets.srcDir(rootProject.file("web"))
+        }
+    }
 }
 
 dependencies {

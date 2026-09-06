@@ -7,24 +7,27 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #000000;
-      --surface: #111111;
+      --bg: #0b0b0c;
+      --surface: #141416;
       --text: #e8eaed;
-      --muted: #9aa0a6;
+      --muted: rgba(232, 234, 237, 0.72);
       --accent: #8ab4f8;
-      --ring: #3c4043;
+      --ring: rgba(255, 255, 255, 0.12);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      background: var(--bg);
+      background:
+        radial-gradient(1200px 700px at 50% 0%, #1a1d24 0%, transparent 62%),
+        var(--bg);
       color: var(--text);
-      font-family: "Google Sans", "Roboto", "Segoe UI", sans-serif;
+      font-family: "Google Sans", Roboto, system-ui, -apple-system, sans-serif;
       padding: 24px;
+      -webkit-font-smoothing: antialiased;
     }
     .panel { width: min(640px, 100%); margin: 0 auto; }
-    h1 { font-size: 28px; margin: 0 0 8px; }
+    h1 { font-size: 32px; font-weight: 300; letter-spacing: -0.02em; margin: 0 0 8px; }
     .hint { color: var(--muted); margin-bottom: 28px; line-height: 1.5; }
     form { display: grid; gap: 18px; }
     label { display: grid; gap: 8px; font-size: 14px; color: var(--muted); }
@@ -78,12 +81,8 @@
     <form id="configForm">
       <div class="section-title">Extron SMP</div>
       <label>
-        SMP hostname or IP
-        <input id="smpHost" name="smpHost" type="text" autocomplete="off" required>
-      </label>
-      <label>
-        SMP SSH port
-        <input id="smpSshPort" name="smpSshPort" type="number" min="1" max="65535" required>
+        SMP address
+        <input id="smpAddress" name="smpAddress" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="192.168.1.10 or 192.168.1.10:22023" required>
       </label>
       <label>
         SSH username
@@ -102,16 +101,12 @@
 
       <div class="section-title">Streaming presets</div>
       <label>
-        Stream index
-        <input id="streamIndex" name="streamIndex" type="number" min="1" max="3" required>
+        Mandarin preset number
+        <input id="mandarinPreset" name="mandarinPreset" type="number" min="1" max="32" required>
       </label>
       <label>
         English preset number
         <input id="englishPreset" name="englishPreset" type="number" min="1" max="32" required>
-      </label>
-      <label>
-        Mandarin preset number
-        <input id="mandarinPreset" name="mandarinPreset" type="number" min="1" max="32" required>
       </label>
 
       <div id="saveMessage"></div>
@@ -125,29 +120,71 @@
   <script>
     const form = document.getElementById("configForm");
     const saveMessage = document.getElementById("saveMessage");
+    const DEFAULT_SSH_PORT = 22023;
+
+    function formatAddress(host, port) {
+      host = (host || "").trim();
+      port = Number(port) || DEFAULT_SSH_PORT;
+      if (!host) return "";
+      if (port === DEFAULT_SSH_PORT) return host;
+      if (host.includes(":") && !host.startsWith("[")) return "[" + host + "]:" + port;
+      return host + ":" + port;
+    }
+
+    function parseAddress(value) {
+      const raw = (value || "").trim();
+      if (!raw) return { error: "SMP address is required" };
+      if (/\s/.test(raw) || /:\/\//.test(raw)) {
+        return { error: "Enter a hostname or IP, optionally with :port" };
+      }
+
+      const bracket = raw.match(/^\[([^\]]+)\](?::(\d+))?$/);
+      if (bracket) {
+        const port = bracket[2] ? Number(bracket[2]) : DEFAULT_SSH_PORT;
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          return { error: "SSH port must be between 1 and 65535" };
+        }
+        return { host: bracket[1], port };
+      }
+
+      const colon = raw.lastIndexOf(":");
+      if (colon > 0 && raw.indexOf(":") === colon && /^\d+$/.test(raw.slice(colon + 1))) {
+        const port = Number(raw.slice(colon + 1));
+        const host = raw.slice(0, colon).trim();
+        if (!host) return { error: "SMP address is required" };
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          return { error: "SSH port must be between 1 and 65535" };
+        }
+        return { host, port };
+      }
+
+      return { host: raw, port: DEFAULT_SSH_PORT };
+    }
 
     async function loadConfig() {
       const response = await fetch("/api/config");
       const data = await response.json();
-      document.getElementById("smpHost").value = data.smpHost || "";
-      document.getElementById("smpSshPort").value = data.smpSshPort || 22023;
+      document.getElementById("smpAddress").value = formatAddress(data.smpHost, data.smpSshPort);
       document.getElementById("smpUsername").value = data.smpUsername || "";
       document.getElementById("httpPort").value = data.httpPort || 8080;
-      document.getElementById("streamIndex").value = data.streamIndex || 1;
       document.getElementById("englishPreset").value = data.englishPreset || 2;
       document.getElementById("mandarinPreset").value = data.mandarinPreset || 1;
     }
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const address = parseAddress(document.getElementById("smpAddress").value);
+      if (address.error) {
+        saveMessage.textContent = address.error;
+        return;
+      }
       saveMessage.textContent = "Saving...";
       const payload = {
-        smpHost: document.getElementById("smpHost").value.trim(),
-        smpSshPort: Number(document.getElementById("smpSshPort").value),
+        smpHost: address.host,
+        smpSshPort: address.port,
         smpUsername: document.getElementById("smpUsername").value.trim(),
         smpPassword: document.getElementById("smpPassword").value,
         httpPort: Number(document.getElementById("httpPort").value),
-        streamIndex: Number(document.getElementById("streamIndex").value),
         englishPreset: Number(document.getElementById("englishPreset").value),
         mandarinPreset: Number(document.getElementById("mandarinPreset").value)
       };
@@ -160,7 +197,7 @@
       if (response.ok) {
         saveMessage.textContent = "Saved. Server listening on port " + data.httpPort + ".";
         document.getElementById("smpPassword").value = "";
-        if (data.httpPort && data.httpPort !== window.location.port) {
+        if (data.httpPort && String(data.httpPort) !== window.location.port) {
           saveMessage.textContent += " Reload Fully Kiosk at the new port.";
         }
       } else {
