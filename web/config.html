@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Streaming Configuration</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #000000;
+      --surface: #111111;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #8ab4f8;
+      --ring: #3c4043;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Google Sans", "Roboto", "Segoe UI", sans-serif;
+      padding: 24px;
+    }
+    .panel { width: min(640px, 100%); margin: 0 auto; }
+    h1 { font-size: 28px; margin: 0 0 8px; }
+    .hint { color: var(--muted); margin-bottom: 28px; line-height: 1.5; }
+    form { display: grid; gap: 18px; }
+    label { display: grid; gap: 8px; font-size: 14px; color: var(--muted); }
+    input {
+      width: 100%;
+      min-height: 52px;
+      border-radius: 16px;
+      border: 1px solid var(--ring);
+      background: var(--surface);
+      color: var(--text);
+      padding: 0 16px;
+      font-size: 16px;
+    }
+    .actions { display: flex; gap: 12px; margin-top: 8px; }
+    button, .link-button {
+      min-height: 52px;
+      border-radius: 999px;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 20px;
+    }
+    button[type="submit"] { background: var(--text); color: #000000; flex: 1; }
+    .link-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      color: var(--accent);
+      text-decoration: none;
+      border: 1px solid var(--ring);
+    }
+    #saveMessage { min-height: 20px; color: var(--accent); }
+    .section-title {
+      margin-top: 12px;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <h1>Configuration</h1>
+    <p class="hint">
+      Set the Extron SMP connection once. Credentials stay on this device only.
+      Changing the HTTP port restarts the local server.
+    </p>
+
+    <form id="configForm">
+      <div class="section-title">Extron SMP</div>
+      <label>
+        SMP hostname or IP
+        <input id="smpHost" name="smpHost" type="text" autocomplete="off" required>
+      </label>
+      <label>
+        SMP SSH port
+        <input id="smpSshPort" name="smpSshPort" type="number" min="1" max="65535" required>
+      </label>
+      <label>
+        SSH username
+        <input id="smpUsername" name="smpUsername" type="text" autocomplete="username" required>
+      </label>
+      <label>
+        SSH password
+        <input id="smpPassword" name="smpPassword" type="password" autocomplete="current-password">
+      </label>
+
+      <div class="section-title">Local server</div>
+      <label>
+        HTTP port for Fully Kiosk Browser
+        <input id="httpPort" name="httpPort" type="number" min="1024" max="65535" required>
+      </label>
+
+      <div class="section-title">Streaming presets</div>
+      <label>
+        Stream index
+        <input id="streamIndex" name="streamIndex" type="number" min="1" max="3" required>
+      </label>
+      <label>
+        English preset number
+        <input id="englishPreset" name="englishPreset" type="number" min="1" max="32" required>
+      </label>
+      <label>
+        Mandarin preset number
+        <input id="mandarinPreset" name="mandarinPreset" type="number" min="1" max="32" required>
+      </label>
+
+      <div id="saveMessage"></div>
+      <div class="actions">
+        <a class="link-button" href="/">Back</a>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </main>
+
+  <script>
+    const form = document.getElementById("configForm");
+    const saveMessage = document.getElementById("saveMessage");
+
+    async function loadConfig() {
+      const response = await fetch("/api/config");
+      const data = await response.json();
+      document.getElementById("smpHost").value = data.smpHost || "";
+      document.getElementById("smpSshPort").value = data.smpSshPort || 22023;
+      document.getElementById("smpUsername").value = data.smpUsername || "";
+      document.getElementById("httpPort").value = data.httpPort || 8080;
+      document.getElementById("streamIndex").value = data.streamIndex || 1;
+      document.getElementById("englishPreset").value = data.englishPreset || 1;
+      document.getElementById("mandarinPreset").value = data.mandarinPreset || 2;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      saveMessage.textContent = "Saving...";
+      const payload = {
+        smpHost: document.getElementById("smpHost").value.trim(),
+        smpSshPort: Number(document.getElementById("smpSshPort").value),
+        smpUsername: document.getElementById("smpUsername").value.trim(),
+        smpPassword: document.getElementById("smpPassword").value,
+        httpPort: Number(document.getElementById("httpPort").value),
+        streamIndex: Number(document.getElementById("streamIndex").value),
+        englishPreset: Number(document.getElementById("englishPreset").value),
+        mandarinPreset: Number(document.getElementById("mandarinPreset").value)
+      };
+      const response = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (response.ok) {
+        saveMessage.textContent = "Saved. Server listening on port " + data.httpPort + ".";
+        document.getElementById("smpPassword").value = "";
+        if (data.httpPort && data.httpPort !== window.location.port) {
+          saveMessage.textContent += " Reload Fully Kiosk at the new port.";
+        }
+      } else {
+        saveMessage.textContent = data.error || "Save failed";
+      }
+    });
+
+    loadConfig().catch((error) => {
+      saveMessage.textContent = String(error);
+    });
+  </script>
+</body>
+</html>

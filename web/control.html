@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Streaming</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #000000;
+      --surface: #111111;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #8ab4f8;
+      --ring: #5f6368;
+      --active: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Google Sans", "Roboto", "Segoe UI", sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .panel { width: min(520px, 100%); }
+    .status {
+      min-height: 72px;
+      margin-bottom: 32px;
+      padding: 20px 24px;
+      border-radius: 28px;
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 8px;
+    }
+    .status-label {
+      font-size: 14px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .status-value { font-size: 28px; line-height: 1.2; }
+    .status-error { font-size: 14px; color: #f28b82; min-height: 18px; }
+    .choices { display: grid; gap: 16px; }
+    .choice {
+      border: 1px solid var(--ring);
+      background: transparent;
+      color: var(--text);
+      border-radius: 999px;
+      min-height: 72px;
+      font-size: 22px;
+      cursor: pointer;
+    }
+    .choice.active {
+      background: var(--active);
+      color: #000000;
+      border-color: var(--active);
+    }
+    .choice:disabled, .stop:disabled { opacity: 0.35; cursor: not-allowed; }
+    .stop {
+      margin-top: 24px;
+      width: 100%;
+      min-height: 64px;
+      border-radius: 999px;
+      border: 1px solid #5f3634;
+      background: #1f1413;
+      color: #f28b82;
+      font-size: 20px;
+      cursor: pointer;
+    }
+    .footer { margin-top: 28px; text-align: center; }
+    .footer a { color: var(--accent); text-decoration: none; font-size: 15px; }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <section class="status" aria-live="polite">
+      <div class="status-label">Status</div>
+      <div id="statusValue" class="status-value">Loading...</div>
+      <div id="statusError" class="status-error"></div>
+    </section>
+
+    <div class="choices" role="radiogroup" aria-label="Streaming language">
+      <button id="englishButton" class="choice" type="button">English</button>
+      <button id="mandarinButton" class="choice" type="button">Mandarin</button>
+    </div>
+
+    <button id="stopButton" class="stop" type="button" disabled>Stop</button>
+
+    <div class="footer">
+      <a href="/config">Configuration</a>
+    </div>
+  </main>
+
+  <script>
+    const statusValue = document.getElementById("statusValue");
+    const statusError = document.getElementById("statusError");
+    const englishButton = document.getElementById("englishButton");
+    const mandarinButton = document.getElementById("mandarinButton");
+    const stopButton = document.getElementById("stopButton");
+    let busy = false;
+
+    function setActive(stream) {
+      englishButton.classList.toggle("active", stream === "english");
+      mandarinButton.classList.toggle("active", stream === "mandarin");
+    }
+
+    async function refreshStatus() {
+      try {
+        const response = await fetch("/api/status", { cache: "no-store" });
+        const data = await response.json();
+        statusValue.textContent = data.statusMessage || "Idle";
+        statusError.textContent = data.lastError || "";
+        setActive(data.activeStream);
+        stopButton.disabled = !data.streamEnabled || busy;
+      } catch (error) {
+        statusValue.textContent = "Server unavailable";
+        statusError.textContent = String(error);
+        stopButton.disabled = true;
+      }
+    }
+
+    async function postAction(path) {
+      if (busy) return;
+      busy = true;
+      englishButton.disabled = true;
+      mandarinButton.disabled = true;
+      stopButton.disabled = true;
+      try {
+        const response = await fetch(path, { method: "POST" });
+        const data = await response.json();
+        statusValue.textContent = data.statusMessage || "Updated";
+        statusError.textContent = data.lastError || "";
+        setActive(data.activeStream);
+      } catch (error) {
+        statusError.textContent = String(error);
+      } finally {
+        busy = false;
+        englishButton.disabled = false;
+        mandarinButton.disabled = false;
+        await refreshStatus();
+      }
+    }
+
+    englishButton.addEventListener("click", () => postAction("/api/stream/english"));
+    mandarinButton.addEventListener("click", () => postAction("/api/stream/mandarin"));
+    stopButton.addEventListener("click", () => postAction("/api/stream/stop"));
+    refreshStatus();
+    setInterval(refreshStatus, 3000);
+  </script>
+</body>
+</html>

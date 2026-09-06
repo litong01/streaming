@@ -68,6 +68,9 @@ class StreamingForegroundService : Service() {
             smpClient = app.smpClient,
             onConfigSaved = { updatedConfig ->
                 serviceScope.launch {
+                    // Let the configuration response reach the WebView before
+                    // stopping the server that handled the request.
+                    delay(CONFIG_RESTART_DELAY_MS)
                     restartHttpServer(app, updatedConfig)
                     startPolling(app, updatedConfig)
                 }
@@ -138,6 +141,7 @@ class StreamingForegroundService : Service() {
         private const val TAG = "StreamingForegroundSvc"
         private const val CHANNEL_ID = "streaming_server"
         private const val NOTIFICATION_ID = 1001
+        private const val CONFIG_RESTART_DELAY_MS = 500L
 
         fun start(context: Context) {
             val intent = Intent(context, StreamingForegroundService::class.java)
