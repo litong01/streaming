@@ -7,6 +7,7 @@ import com.streaming.app.smp.SmpClient
 import com.streaming.app.smp.StreamState
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONObject
+import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
@@ -100,7 +101,7 @@ class StreamingHttpServer(
 
     private fun runSmpAction(action: (AppConfig) -> StreamState): Response {
         val config = configStore.load()
-        val state = worker.submit { action(config) }.get()
+        val state = worker.submit(Callable { action(config) }).get()
         currentState.set(state)
         return jsonResponse(state.toJson())
     }

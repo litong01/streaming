@@ -180,7 +180,7 @@ class SmpClient {
     private fun readResponse(inputStream: InputStream): String {
         val buffer = ByteArrayOutputStream()
         val chunk = ByteArray(1024)
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(READ_TIMEOUT_MS)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(READ_TIMEOUT_MS.toLong())
 
         while (System.nanoTime() < deadline) {
             while (inputStream.available() > 0) {
