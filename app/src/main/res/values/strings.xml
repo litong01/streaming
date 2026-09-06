@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Streaming</string>
+    <string name="service_notification_title">Streaming server running</string>
+    <string name="service_notification_text">Control page available on the configured port</string>
+    <string name="start_service">Start server</string>
+    <string name="stop_service">Stop server</string>
+    <string name="open_control_page">Open control page</string>
+    <string name="open_config_page">Open configuration</string>
+    <string name="service_status_running">Server running</string>
+    <string name="service_status_stopped">Server stopped</string>
+    <string name="local_url_label">Local URL</string>
+    <string name="setup_hint">Configure the SMP connection once, then use Fully Kiosk Browser to open the control page.</string>
+</resources>
