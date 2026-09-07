@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -20,6 +21,7 @@ const (
 	DefaultEnglishPreset       = 2
 	DefaultMandarinPreset      = 1
 	DefaultPollIntervalSeconds = 3
+	DefaultGo2rtcPort          = 1984
 	CurrentSchemaVersion       = 2
 )
 
@@ -36,6 +38,8 @@ type Config struct {
 	EnglishPreset       int    `json:"englishPreset"`
 	MandarinPreset      int    `json:"mandarinPreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
+	PreviewURL          string `json:"previewUrl"`
+	Go2rtcPort          int    `json:"go2rtcPort"`
 }
 
 type PublicConfig struct {
@@ -47,6 +51,8 @@ type PublicConfig struct {
 	EnglishPreset       int    `json:"englishPreset"`
 	MandarinPreset      int    `json:"mandarinPreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
+	PreviewURL          string `json:"previewUrl"`
+	Go2rtcPort          int    `json:"go2rtcPort"`
 	IsSmpConfigured     bool   `json:"isSmpConfigured"`
 }
 
@@ -73,6 +79,7 @@ func Default() Config {
 		EnglishPreset:       DefaultEnglishPreset,
 		MandarinPreset:      DefaultMandarinPreset,
 		PollIntervalSeconds: DefaultPollIntervalSeconds,
+		Go2rtcPort:          DefaultGo2rtcPort,
 	}
 }
 
@@ -168,6 +175,8 @@ func (s *Store) Public() PublicConfig {
 		EnglishPreset:       cfg.EnglishPreset,
 		MandarinPreset:      cfg.MandarinPreset,
 		PollIntervalSeconds: cfg.PollIntervalSeconds,
+		PreviewURL:          cfg.PreviewURL,
+		Go2rtcPort:          cfg.Go2rtcPort,
 		IsSmpConfigured:     cfg.IsSmpConfigured(),
 	}
 }
@@ -287,6 +296,10 @@ func withDefaults(cfg Config) Config {
 	if cfg.PollIntervalSeconds == 0 {
 		cfg.PollIntervalSeconds = DefaultPollIntervalSeconds
 	}
+	if cfg.Go2rtcPort == 0 {
+		cfg.Go2rtcPort = DefaultGo2rtcPort
+	}
+	cfg.PreviewURL = strings.TrimSpace(cfg.PreviewURL)
 	return cfg
 }
 

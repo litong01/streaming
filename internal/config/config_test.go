@@ -143,6 +143,25 @@ func TestValidateRejectsSamePresetsAndLowHTTPPort(t *testing.T) {
 	}
 }
 
+func TestValidatePreviewURL(t *testing.T) {
+	if err := ValidatePreviewURL(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePreviewURL("rtsp://192.0.2.10/extron2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePreviewURL("ftp://192.0.2.10/stream"); err == nil {
+		t.Fatal("expected scheme error")
+	}
+	cfg := Default()
+	cfg.SmpHost = "192.0.2.10"
+	cfg.SmpUsername = "admin"
+	cfg.Go2rtcPort = cfg.HTTPPort
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected preview port collision")
+	}
+}
+
 func TestEncryptedConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.bin")
 	runtimePath := filepath.Join(t.TempDir(), "runtime.json")

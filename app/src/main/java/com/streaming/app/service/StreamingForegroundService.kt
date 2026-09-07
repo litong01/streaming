@@ -64,6 +64,7 @@ class StreamingForegroundService : Service() {
             check(binary.isFile && binary.canExecute()) {
                 "Go server is missing or not executable: ${binary.absolutePath}"
             }
+            val go2rtc = File(applicationInfo.nativeLibraryDir, GO2RTC_LIBRARY)
             val builder = ProcessBuilder(binary.absolutePath)
                 .redirectErrorStream(true)
             builder.environment().apply {
@@ -71,6 +72,10 @@ class StreamingForegroundService : Service() {
                 put("STREAMING_RUNTIME", launch.runtimeFile.absolutePath)
                 put("STREAMING_CONFIG_KEY", launch.encryptionKey)
                 launch.importConfig?.let { put("STREAMING_IMPORT_CONFIG", it) }
+                if (go2rtc.isFile) {
+                    put("STREAMING_GO2RTC", go2rtc.absolutePath)
+                    put("STREAMING_GO2RTC_HOME", File(launch.configFile.parentFile, "go2rtc").absolutePath)
+                }
             }
             val process = builder.start()
             serverProcess = process
@@ -199,6 +204,7 @@ class StreamingForegroundService : Service() {
         private const val TAG = "StreamingForegroundSvc"
         private const val GO_SERVER_TAG = "StreamingGoServer"
         private const val GO_SERVER_LIBRARY = "libstreaming.so"
+        private const val GO2RTC_LIBRARY = "libgo2rtc.so"
         private const val CHANNEL_ID = "streaming_server"
         private const val NOTIFICATION_ID = 1001
         private const val RESTART_DELAY_MS = 2_000L

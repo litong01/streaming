@@ -36,16 +36,35 @@ if [[ ! -x "$CC" ]]; then
   exit 1
 fi
 
-OUTPUT="$ROOT_DIR/app/build/generated/jniLibs/arm64-v8a/libstreaming.so"
-mkdir -p "$(dirname "$OUTPUT")"
+OUTPUT_DIR="$ROOT_DIR/app/build/generated/jniLibs/arm64-v8a"
+mkdir -p "$OUTPUT_DIR"
 
-(
-  cd "$ROOT_DIR"
-  CGO_ENABLED=1 \
-  GOOS=android \
-  GOARCH=arm64 \
-  CC="$CC" \
-  go build -buildmode=pie -trimpath -buildvcs=false -ldflags="-s -w" -o "$OUTPUT" .
-)
+android_build() {
+  local src="$1"
+  local out="$2"
+  local extra_ldflags="${3:-}"
+  (
+    cd "$src"
+    CGO_ENABLED=1 \
+    GOOS=android \
+    GOARCH=arm64 \
+    CC="$CC" \
+    go build -buildmode=pie -trimpath -buildvcs=false -ldflags="-s -w ${extra_ldflags}" -o "$out" .
+  )
+}
 
-echo "Built Android Go server: $OUTPUT"
+android_build "$ROOT_DIR" "$OUTPUT_DIR/libstreaming.so"
+echo "Built Android Go server: $OUTPUT_DIR/libstreaming.so"
+
+GO2RTC_VERSION="${GO2RTC_VERSION:-v1.9.14}"
+GO2RTC_SRC="$ROOT_DIR/build/go2rtc-${GO2RTC_VERSION}"
+if [[ ! -d "$GO2RTC_SRC/.git" ]]; then
+  rm -rf "$GO2RTC_SRC"
+  git clone --depth 1 --branch "$GO2RTC_VERSION" https://github.com/AlexxIT/go2rtc.git "$GO2RTC_SRC"
+fi
+# ALSA/V4L2 pull Linux C sources that do not cross-compile for Android.
+if grep -q 'github.com/AlexxIT/go2rtc/internal/alsa' "$GO2RTC_SRC/main.go"; then
+  git -C "$GO2RTC_SRC" apply "$ROOT_DIR/scripts/go2rtc-android.patch"
+fi
+android_build "$GO2RTC_SRC" "$OUTPUT_DIR/libgo2rtc.so" "-checklinkname=0"
+echo "Built Android go2rtc: $OUTPUT_DIR/libgo2rtc.so"

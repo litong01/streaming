@@ -10,7 +10,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "internal/**"
-      - "scripts/build-android-go.sh"
+      - "scripts/**"
       - "app/**"
       - "web/**"
       - "build.gradle.kts"
@@ -25,7 +25,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "internal/**"
-      - "scripts/build-android-go.sh"
+      - "scripts/**"
       - "app/**"
       - "web/**"
       - "build.gradle.kts"
@@ -41,7 +41,7 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
 
     steps:
       - name: Check out source

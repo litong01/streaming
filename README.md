@@ -8,11 +8,12 @@ ARM64 executable supervised by the Android app.
 
 - Tapping the Streaming app icon starts the foreground web server and opens its
   configuration page inside the app.
-- The APK contains the Go control server. A small Kotlin foreground service
-  starts it, restarts it after an unexpected exit, and keeps Android from
-  suspending it.
+- The APK contains the Go control server and a go2rtc binary. A small Kotlin
+  foreground service starts the Go server, which in turn starts go2rtc for the
+  live preview.
 - The configuration page collects the SMP address, SSH credentials, server
-  port, and preset numbers.
+  port, preset numbers, and the SMP confidence/secondary stream URL used for
+  the on-screen preview.
 - Credentials are encrypted and stored only on the Android device.
 - Fully Kiosk Browser uses `http://127.0.0.1:8080/` for daily operation.
 - The server starts again after tablet reboot.
@@ -26,9 +27,10 @@ required on your Mac because GitHub Actions performs the Android build.
 ## Web pages
 
 The Go server embeds the two pages from `web/`. The control page follows the
-myconsole launcher look used by Fully Kiosk Browser: clock, date, and round
-tiles for English, Mandarin, and Stop. The same embedded pages are served by
-the desktop executable and by the executable packaged in the APK.
+myconsole launcher look used by Fully Kiosk Browser: clock, date, a small live
+preview above the round tiles, and English / Mandarin / Stop. The preview is
+shown only while a stream is enabled. go2rtc converts the SMP secondary output
+into a browser-playable stream so the picture matches what is pushed to YouTube.
 
 ## Build and download the APK
 
@@ -50,8 +52,10 @@ create a release.
 2. Grant notification permission so Android can show the server's persistent
    foreground-service notification.
 3. Enter the SMP address (`host` or `host:22023`), username, password,
-   and the local server port (default `8080`). The SSH port is `22023`
-   unless you include a different one after the colon.
+   and the local server port (default `8080`). Paste the SMP confidence /
+   secondary RTSP URL from the SMP Device Status page (for example
+   `rtsp://192.168.1.10/extron2`). The SSH port is `22023` unless you include
+   a different one after the colon.
 4. Save the configuration.
 5. Point Fully Kiosk Browser at `http://127.0.0.1:8080/`.
 
@@ -72,12 +76,17 @@ Its configuration is stored at
 `~/.config/streaming/config.json` with file mode `0600`. Override the path with
 the `STREAMING_CONFIG` environment variable.
 
+On a computer, install [go2rtc](https://github.com/AlexxIT/go2rtc/releases) on
+your `PATH`, place the binary next to `./streaming`, or set `STREAMING_GO2RTC`
+to its path. The control server writes `go2rtc.yaml` and starts that process on
+port `1984` (configurable).
+
 ## Android build details
 
 The Gradle build invokes `scripts/build-android-go.sh`, which uses the Android
-NDK to compile an ARM64 PIE executable. It is packaged as
-`lib/arm64-v8a/libstreaming.so` so Android extracts it into the app's executable
-native-library directory. The Kotlin foreground service launches that file.
+NDK to compile ARM64 PIE executables for the control server and go2rtc. They
+are packaged as `lib/arm64-v8a/libstreaming.so` and `lib/arm64-v8a/libgo2rtc.so`
+so Android extracts them into the app's executable native-library directory.
 
 On upgrade from the earlier Kotlin-server APK, existing encrypted SMP settings
 are imported once. The Go configuration file is encrypted with an AES-GCM key
@@ -94,4 +103,5 @@ For stream 1 (Archive Ch A) and preset `P`:
 - Query selected streaming preset: `46I`
 
 The app always controls Archive Channel A. That is the encoder used for the
-YouTube live push.
+YouTube live push. The on-screen player uses the SMP confidence/secondary
+output through go2rtc, so the tablet shows the same encoded picture.

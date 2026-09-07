@@ -75,7 +75,8 @@
     <h1>Configuration</h1>
     <p class="hint">
       Set the Extron SMP connection once. Credentials stay on this device only.
-      Changing the HTTP port restarts the local server.
+      Changing the HTTP port restarts the local server. The confidence stream
+      URL is the SMP secondary output that go2rtc shows in the live preview.
     </p>
 
     <form id="configForm">
@@ -97,6 +98,14 @@
       <label>
         HTTP port for Fully Kiosk Browser
         <input id="httpPort" name="httpPort" type="number" min="1024" max="65535" required>
+      </label>
+      <label>
+        Confidence / secondary stream URL
+        <input id="previewUrl" name="previewUrl" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="rtsp://192.168.1.10/extron2">
+      </label>
+      <label>
+        go2rtc preview port
+        <input id="go2rtcPort" name="go2rtcPort" type="number" min="1024" max="65535" required>
       </label>
 
       <div class="section-title">Streaming presets</div>
@@ -167,6 +176,8 @@
       document.getElementById("smpAddress").value = formatAddress(data.smpHost, data.smpSshPort);
       document.getElementById("smpUsername").value = data.smpUsername || "";
       document.getElementById("httpPort").value = data.httpPort || 8080;
+      document.getElementById("previewUrl").value = data.previewUrl || "";
+      document.getElementById("go2rtcPort").value = data.go2rtcPort || 1984;
       document.getElementById("englishPreset").value = data.englishPreset || 2;
       document.getElementById("mandarinPreset").value = data.mandarinPreset || 1;
     }
@@ -185,6 +196,8 @@
         smpUsername: document.getElementById("smpUsername").value.trim(),
         smpPassword: document.getElementById("smpPassword").value,
         httpPort: Number(document.getElementById("httpPort").value),
+        previewUrl: document.getElementById("previewUrl").value.trim(),
+        go2rtcPort: Number(document.getElementById("go2rtcPort").value),
         englishPreset: Number(document.getElementById("englishPreset").value),
         mandarinPreset: Number(document.getElementById("mandarinPreset").value)
       };

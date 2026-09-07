@@ -50,24 +50,28 @@ android {
             // Android extracts it to the app's executable nativeLibraryDir.
             useLegacyPackaging = true
             keepDebugSymbols += "**/libstreaming.so"
+            keepDebugSymbols += "**/libgo2rtc.so"
         }
     }
 }
 
 val buildAndroidGoServer by tasks.registering(Exec::class) {
     group = "build"
-    description = "Cross-compiles the Go control server for Android ARM64"
+	description = "Cross-compiles the Go control server and go2rtc for Android ARM64"
     workingDir(rootProject.projectDir)
     commandLine("bash", rootProject.file("scripts/build-android-go.sh").absolutePath)
 
-    inputs.files(
-        rootProject.fileTree(".") {
-            include("*.go", "go.mod", "go.sum")
-            include("internal/**/*.go", "web/**")
-            exclude("app/**", "build/**")
-        },
+	inputs.files(
+		rootProject.fileTree(".") {
+			include("*.go", "go.mod", "go.sum")
+			include("internal/**/*.go", "web/**", "scripts/build-android-go.sh", "scripts/go2rtc-android.patch")
+			exclude("app/**", "build/**")
+		},
+	)
+    outputs.files(
+        layout.buildDirectory.file("generated/jniLibs/arm64-v8a/libstreaming.so"),
+        layout.buildDirectory.file("generated/jniLibs/arm64-v8a/libgo2rtc.so"),
     )
-    outputs.file(layout.buildDirectory.file("generated/jniLibs/arm64-v8a/libstreaming.so"))
 }
 
 tasks.named("preBuild").configure {

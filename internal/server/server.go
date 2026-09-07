@@ -13,13 +13,15 @@ import (
 	"time"
 
 	"streaming/internal/config"
+	"streaming/internal/preview"
 	"streaming/internal/smp"
 )
 
 type Server struct {
-	store  *config.Store
-	client *smp.Client
-	pages  Pages
+	store   *config.Store
+	client  *smp.Client
+	preview *preview.Manager
+	pages   Pages
 
 	mu     sync.Mutex
 	state  smp.State
@@ -34,9 +36,10 @@ type Pages struct {
 
 func New(store *config.Store, client *smp.Client, pages Pages) *Server {
 	return &Server{
-		store:  store,
-		client: client,
-		pages:  pages,
+		store:   store,
+		client:  client,
+		preview: preview.New(),
+		pages:   pages,
 		state: smp.State{
 			ActiveStream:  smp.ActiveNone,
 			StatusMessage: "Idle",
@@ -62,6 +65,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		s.mu.Unlock()
 
 		s.startPoller(runCtx)
+		s.preview.Sync(cfg)
 		log.Printf("listening on http://0.0.0.0:%d/", cfg.HTTPPort)
 
 		errCh := make(chan error, 1)
@@ -74,6 +78,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer shutdownCancel()
 			_ = httpServer.Shutdown(shutdownCtx)
+			s.preview.Stop()
 			return ctx.Err()
 		case <-runCtx.Done():
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -147,7 +152,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.getState())
+	writeJSON(w, http.StatusOK, s.statusPayload(s.getState()))
 }
 
 func (s *Server) handleEnglish(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +184,7 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, action fun
 	}
 	state := action(s.store.Get())
 	s.setState(state)
-	writeJSON(w, http.StatusOK, state)
+	writeJSON(w, http.StatusOK, s.statusPayload(state))
 }
 
 func (s *Server) handleConfigAPI(w http.ResponseWriter, r *http.Request) {
@@ -201,6 +206,8 @@ type configPayload struct {
 	HTTPPort       int    `json:"httpPort"`
 	EnglishPreset  int    `json:"englishPreset"`
 	MandarinPreset int    `json:"mandarinPreset"`
+	PreviewURL     string `json:"previewUrl"`
+	Go2rtcPort     int    `json:"go2rtcPort"`
 }
 
 func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +241,11 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	next.StreamIndex = config.DefaultStreamIndex
 	next.EnglishPreset = payload.EnglishPreset
 	next.MandarinPreset = payload.MandarinPreset
+	next.PreviewURL = strings.TrimSpace(payload.PreviewURL)
+	next.Go2rtcPort = payload.Go2rtcPort
+	if next.Go2rtcPort == 0 {
+		next.Go2rtcPort = config.DefaultGo2rtcPort
+	}
 	if err := next.Validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -245,8 +257,11 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "httpPort": next.HTTPPort})
+	previewChanged := next.PreviewURL != current.PreviewURL || next.Go2rtcPort != current.Go2rtcPort
 	if next.HTTPPort != current.HTTPPort {
 		go s.restart()
+	} else if previewChanged {
+		go s.preview.Sync(next)
 	}
 }
 
@@ -260,6 +275,25 @@ func (s *Server) setState(state smp.State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state = state
+}
+
+type statusPayload struct {
+	smp.State
+	PreviewReady      bool `json:"previewReady"`
+	PreviewConfigured bool `json:"previewConfigured"`
+	Go2rtcPort        int  `json:"go2rtcPort"`
+	Go2rtcAvailable   bool `json:"go2rtcAvailable"`
+}
+
+func (s *Server) statusPayload(state smp.State) statusPayload {
+	cfg := s.store.Get()
+	return statusPayload{
+		State:             state,
+		PreviewReady:      s.preview.Ready(),
+		PreviewConfigured: strings.TrimSpace(cfg.PreviewURL) != "",
+		Go2rtcPort:        cfg.Go2rtcPort,
+		Go2rtcAvailable:   s.preview.Available(),
+	}
 }
 
 func writeHTML(w http.ResponseWriter, body []byte) {
