@@ -1,8 +1,13 @@
 package config
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,6 +22,8 @@ const (
 	DefaultPollIntervalSeconds = 3
 	CurrentSchemaVersion       = 2
 )
+
+var encryptedFileMagic = []byte("STREAMING-CONFIG-V1\x00")
 
 type Config struct {
 	SchemaVersion       int    `json:"schemaVersion"`
@@ -44,9 +51,17 @@ type PublicConfig struct {
 }
 
 type Store struct {
-	path string
-	mu   sync.RWMutex
-	cfg  Config
+	path        string
+	runtimePath string
+	key         []byte
+	mu          sync.RWMutex
+	cfg         Config
+}
+
+type LoadOptions struct {
+	EncryptionKey []byte
+	RuntimePath   string
+	InitialConfig *Config
 }
 
 func Default() Config {
@@ -73,10 +88,25 @@ func Path() (string, error) {
 }
 
 func Load(path string) (*Store, error) {
-	store := &Store{path: path, cfg: Default()}
+	return LoadWithOptions(path, LoadOptions{})
+}
+
+func LoadWithOptions(path string, options LoadOptions) (*Store, error) {
+	if len(options.EncryptionKey) != 0 && len(options.EncryptionKey) != 32 {
+		return nil, fmt.Errorf("configuration encryption key must be 32 bytes")
+	}
+	store := &Store{
+		path:        path,
+		runtimePath: options.RuntimePath,
+		key:         append([]byte(nil), options.EncryptionKey...),
+		cfg:         Default(),
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			if options.InitialConfig != nil {
+				store.cfg = withDefaults(*options.InitialConfig)
+			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				return nil, err
 			}
@@ -87,6 +117,16 @@ func Load(path string) (*Store, error) {
 		}
 		return nil, err
 	}
+	wasEncrypted := len(store.key) != 0 && hasEncryptedFileMagic(data)
+	if hasEncryptedFileMagic(data) {
+		if len(store.key) == 0 {
+			return nil, fmt.Errorf("encrypted configuration requires an encryption key")
+		}
+		data, err = decryptConfig(data, store.key)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var loaded Config
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return nil, err
@@ -94,10 +134,12 @@ func Load(path string) (*Store, error) {
 	store.cfg = loaded
 	needsSave := migratePresetMapping(&store.cfg)
 	store.cfg = withDefaults(store.cfg)
-	if needsSave {
+	if needsSave || (len(store.key) != 0 && !wasEncrypted) {
 		if err := store.saveLocked(); err != nil {
 			return nil, err
 		}
+	} else if err := store.writeRuntimeLocked(); err != nil {
+		return nil, err
 	}
 	return store, nil
 }
@@ -142,11 +184,87 @@ func (s *Store) saveLocked() error {
 	if err != nil {
 		return err
 	}
+	if len(s.key) != 0 {
+		data, err = encryptConfig(data, s.key)
+		if err != nil {
+			return err
+		}
+	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	return s.writeRuntimeLocked()
+}
+
+func (s *Store) writeRuntimeLocked() error {
+	if s.runtimePath == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(s.runtimePath), 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(struct {
+		HTTPPort int `json:"httpPort"`
+	}{HTTPPort: s.cfg.HTTPPort})
+	if err != nil {
+		return err
+	}
+	tmp := s.runtimePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.runtimePath)
+}
+
+func hasEncryptedFileMagic(data []byte) bool {
+	return len(data) >= len(encryptedFileMagic) &&
+		string(data[:len(encryptedFileMagic)]) == string(encryptedFileMagic)
+}
+
+func encryptConfig(plaintext, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	result := make([]byte, 0, len(encryptedFileMagic)+len(nonce)+len(plaintext)+aead.Overhead())
+	result = append(result, encryptedFileMagic...)
+	result = append(result, nonce...)
+	result = aead.Seal(result, nonce, plaintext, encryptedFileMagic)
+	return result, nil
+}
+
+func decryptConfig(data, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	payload := data[len(encryptedFileMagic):]
+	if len(payload) < aead.NonceSize()+aead.Overhead() {
+		return nil, fmt.Errorf("encrypted configuration is truncated")
+	}
+	nonce := payload[:aead.NonceSize()]
+	ciphertext := payload[aead.NonceSize():]
+	plaintext, err := aead.Open(nil, nonce, ciphertext, encryptedFileMagic)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt configuration: %w", err)
+	}
+	return plaintext, nil
 }
 
 func withDefaults(cfg Config) Config {

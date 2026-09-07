@@ -1,12 +1,16 @@
 # Streaming
 
-Tablet-based control of Extron SMP 300 Series streaming presets. The repository
-contains an Android app for the tablet and an optional standalone Go server.
+Tablet-based control of Extron SMP 300 Series streaming presets. One Go control
+server is used everywhere: as a standalone executable on computers and as an
+ARM64 executable supervised by the Android app.
 
 ## Android behavior
 
 - Tapping the Streaming app icon starts the foreground web server and opens its
   configuration page inside the app.
+- The APK contains the Go control server. A small Kotlin foreground service
+  starts it, restarts it after an unexpected exit, and keeps Android from
+  suspending it.
 - The configuration page collects the SMP address, SSH credentials, server
   port, and preset numbers.
 - Credentials are encrypted and stored only on the Android device.
@@ -15,15 +19,16 @@ contains an Android app for the tablet and an optional standalone Go server.
 - Preset 1 is Mandarin and preset 2 is English by default. Both presets must
   already be configured through the native SMP web interface.
 
-The Android source is Kotlin, but no Java or Android tooling is required on
-your Mac. GitHub Actions performs the Android build.
+The Android wrapper is Kotlin, but SMP commands, status polling, configuration
+APIs, and web serving are implemented only in Go. No Java or Android tooling is
+required on your Mac because GitHub Actions performs the Android build.
 
 ## Web pages
 
-Both servers serve the same two pages from `web/`. The control page follows the
+The Go server embeds the two pages from `web/`. The control page follows the
 myconsole launcher look used by Fully Kiosk Browser: clock, date, and round
-tiles for English, Mandarin, and Stop. The Go server embeds these files, and the
-Gradle build packages them as Android assets, so an edit in `web/` changes both.
+tiles for English, Mandarin, and Stop. The same embedded pages are served by
+the desktop executable and by the executable packaged in the APK.
 
 ## Build and download the APK
 
@@ -53,10 +58,10 @@ create a release.
 If Fully Kiosk runs on another tablet, use
 `http://<server-tablet-ip>:8080/` instead.
 
-## Optional standalone Go server
+## Standalone Go server
 
-The Go implementation offers the same web controls for a Mac, Linux computer,
-Raspberry Pi, or Termux:
+The same implementation packaged in the APK can run directly on a Mac, Linux
+computer, Raspberry Pi, or Termux:
 
 ```bash
 go build -o streaming .
@@ -66,6 +71,17 @@ go build -o streaming .
 Its configuration is stored at
 `~/.config/streaming/config.json` with file mode `0600`. Override the path with
 the `STREAMING_CONFIG` environment variable.
+
+## Android build details
+
+The Gradle build invokes `scripts/build-android-go.sh`, which uses the Android
+NDK to compile an ARM64 PIE executable. It is packaged as
+`lib/arm64-v8a/libstreaming.so` so Android extracts it into the app's executable
+native-library directory. The Kotlin foreground service launches that file.
+
+On upgrade from the earlier Kotlin-server APK, existing encrypted SMP settings
+are imported once. The Go configuration file is encrypted with an AES-GCM key
+kept in Android Keystore-backed preferences.
 
 ## SMP commands
 

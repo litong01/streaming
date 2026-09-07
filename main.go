@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -21,7 +24,19 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	store, err := config.Load(path)
+	key, err := decodeEncryptionKey(os.Getenv("STREAMING_CONFIG_KEY"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	initialConfig, err := decodeInitialConfig(os.Getenv("STREAMING_IMPORT_CONFIG"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	store, err := config.LoadWithOptions(path, config.LoadOptions{
+		EncryptionKey: key,
+		RuntimePath:   os.Getenv("STREAMING_RUNTIME"),
+		InitialConfig: initialConfig,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -47,4 +62,33 @@ func main() {
 	if err := srv.ListenAndServe(ctx); err != nil && err != context.Canceled {
 		log.Fatal(err)
 	}
+}
+
+func decodeEncryptionKey(value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	key, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("decode STREAMING_CONFIG_KEY: %w", err)
+	}
+	if len(key) != 32 {
+		return nil, fmt.Errorf("STREAMING_CONFIG_KEY must contain 32 bytes")
+	}
+	return key, nil
+}
+
+func decodeInitialConfig(value string) (*config.Config, error) {
+	if value == "" {
+		return nil, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("decode STREAMING_IMPORT_CONFIG: %w", err)
+	}
+	var cfg config.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse STREAMING_IMPORT_CONFIG: %w", err)
+	}
+	return &cfg, nil
 }

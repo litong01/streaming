@@ -8,30 +8,25 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.streaming.app.MainActivity
 import com.streaming.app.R
 import com.streaming.app.StreamingApplication
-import com.streaming.app.config.AppConfig
-import com.streaming.app.server.StreamingHttpServer
-import com.streaming.app.server.WebPages
-import com.streaming.app.smp.StreamState
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 class StreamingForegroundService : Service() {
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var pollJob: Job? = null
-    private var httpServer: StreamingHttpServer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile
+    private var serverProcess: Process? = null
+    @Volatile
+    private var stopping = false
+    private var notificationPort = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -40,70 +35,134 @@ class StreamingForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
-        startServer()
+        startGoServer()
         return START_STICKY
     }
 
     override fun onDestroy() {
-        pollJob?.cancel()
-        serviceScope.cancel()
-        httpServer?.shutdownServer()
-        httpServer = null
+        stopping = true
+        mainHandler.removeCallbacksAndMessages(null)
+        val process = serverProcess
+        serverProcess = null
+        process?.destroy()
+        if (process != null && process.isAlive) {
+            process.destroyForcibly()
+        }
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startServer() {
+    @Synchronized
+    private fun startGoServer() {
+        if (stopping || serverProcess?.isAlive == true) return
+
         val app = application as StreamingApplication
-        val config = app.configStore.load()
-        restartHttpServer(app, config)
-        startPolling(app, config)
-    }
-
-    private fun restartHttpServer(app: StreamingApplication, config: AppConfig) {
-        httpServer?.shutdownServer()
-        val server = StreamingHttpServer(
-            port = config.httpPort,
-            configStore = app.configStore,
-            smpClient = app.smpClient,
-            pages = WebPages(assets),
-            onConfigSaved = { updatedConfig ->
-                serviceScope.launch {
-                    // Let the configuration response reach the WebView before
-                    // stopping the server that handled the request.
-                    delay(CONFIG_RESTART_DELAY_MS)
-                    restartHttpServer(app, updatedConfig)
-                    startPolling(app, updatedConfig)
-                }
-            },
-            initialState = httpServer?.currentState() ?: StreamState(),
-        )
+        val launch = app.serverBootstrap.prepare()
+        val binary = File(applicationInfo.nativeLibraryDir, GO_SERVER_LIBRARY)
         try {
-            server.start(NanoTimeout.SOCKET_READ_TIMEOUT, false)
-            httpServer = server
-            updateNotification(config.httpPort)
-            Log.i(TAG, "HTTP server listening on port ${config.httpPort}")
-        } catch (error: Exception) {
-            Log.e(TAG, "Failed to start HTTP server on port ${config.httpPort}", error)
-        }
-    }
-
-    private fun startPolling(app: StreamingApplication, config: AppConfig) {
-        pollJob?.cancel()
-        pollJob = serviceScope.launch {
-            while (isActive) {
-                val latestConfig = app.configStore.load()
-                val state = withContext(Dispatchers.IO) {
-                    app.smpClient.queryState(latestConfig)
-                }
-                httpServer?.updateState(state)
-                delay(latestConfig.pollIntervalSeconds * 1000L)
+            check(binary.isFile && binary.canExecute()) {
+                "Go server is missing or not executable: ${binary.absolutePath}"
             }
+            val builder = ProcessBuilder(binary.absolutePath)
+                .redirectErrorStream(true)
+            builder.environment().apply {
+                put("STREAMING_CONFIG", launch.configFile.absolutePath)
+                put("STREAMING_RUNTIME", launch.runtimeFile.absolutePath)
+                put("STREAMING_CONFIG_KEY", launch.encryptionKey)
+                launch.importConfig?.let { put("STREAMING_IMPORT_CONFIG", it) }
+            }
+            val process = builder.start()
+            serverProcess = process
+            updateNotification(launch.initialHttpPort)
+            captureOutput(process)
+            monitorServer(process, launch.initialHttpPort)
+            monitorExit(process)
+            Log.i(TAG, "Started Go control server")
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to start Go control server", error)
+            scheduleRestart()
         }
     }
 
-    private fun buildNotification(port: Int = currentHttpPort()): Notification {
+    private fun captureOutput(process: Process) {
+        Thread({
+            try {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { Log.i(GO_SERVER_TAG, it) }
+                }
+            } catch (error: Exception) {
+                if (!stopping) Log.w(TAG, "Failed reading Go server output", error)
+            }
+        }, "go-server-output").start()
+    }
+
+    private fun monitorServer(process: Process, initialPort: Int) {
+        Thread({
+            var migrated = false
+            var lastPort = initialPort
+            while (!stopping && process.isAlive && serverProcess === process) {
+                val app = application as StreamingApplication
+                val port = app.serverBootstrap.currentHttpPort(lastPort)
+                if (serverIsReady(port)) {
+                    if (!migrated) {
+                        app.serverBootstrap.completeLegacyMigration()
+                        migrated = true
+                    }
+                    if (port != lastPort || notificationPort != port) {
+                        lastPort = port
+                        mainHandler.post { updateNotification(port) }
+                    }
+                }
+                try {
+                    Thread.sleep(HEALTH_CHECK_INTERVAL_MS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }, "go-server-health").start()
+    }
+
+    private fun monitorExit(process: Process) {
+        Thread({
+            val exitCode = process.waitFor()
+            if (serverProcess === process) {
+                serverProcess = null
+            }
+            if (!stopping) {
+                Log.w(TAG, "Go control server exited with code $exitCode")
+                scheduleRestart()
+            }
+        }, "go-server-exit").start()
+    }
+
+    private fun serverIsReady(port: Int): Boolean {
+        return try {
+            val connection = URL("http://127.0.0.1:$port/api/status")
+                .openConnection() as HttpURLConnection
+            connection.connectTimeout = HEALTH_CHECK_TIMEOUT_MS
+            connection.readTimeout = HEALTH_CHECK_TIMEOUT_MS
+            connection.useCaches = false
+            try {
+                connection.responseCode == HttpURLConnection.HTTP_OK
+            } finally {
+                connection.disconnect()
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun scheduleRestart() {
+        mainHandler.removeCallbacks(restartRunnable)
+        mainHandler.postDelayed(restartRunnable, RESTART_DELAY_MS)
+    }
+
+    private val restartRunnable = Runnable { startGoServer() }
+
+    private fun buildNotification(
+        port: Int = (application as StreamingApplication).serverBootstrap.currentHttpPort(),
+    ): Notification {
         val openIntent = PendingIntent.getActivity(
             this,
             0,
@@ -121,12 +180,9 @@ class StreamingForegroundService : Service() {
     }
 
     private fun updateNotification(port: Int) {
+        notificationPort = port
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, buildNotification(port))
-    }
-
-    private fun currentHttpPort(): Int {
-        return (application as StreamingApplication).configStore.load().httpPort
     }
 
     private fun createNotificationChannel() {
@@ -141,9 +197,13 @@ class StreamingForegroundService : Service() {
 
     companion object {
         private const val TAG = "StreamingForegroundSvc"
+        private const val GO_SERVER_TAG = "StreamingGoServer"
+        private const val GO_SERVER_LIBRARY = "libstreaming.so"
         private const val CHANNEL_ID = "streaming_server"
         private const val NOTIFICATION_ID = 1001
-        private const val CONFIG_RESTART_DELAY_MS = 500L
+        private const val RESTART_DELAY_MS = 2_000L
+        private const val HEALTH_CHECK_INTERVAL_MS = 1_000L
+        private const val HEALTH_CHECK_TIMEOUT_MS = 750
 
         fun start(context: Context) {
             val intent = Intent(context, StreamingForegroundService::class.java)
@@ -153,9 +213,5 @@ class StreamingForegroundService : Service() {
         fun stop(context: Context) {
             context.stopService(Intent(context, StreamingForegroundService::class.java))
         }
-    }
-
-    private object NanoTimeout {
-        const val SOCKET_READ_TIMEOUT = 5_000
     }
 }

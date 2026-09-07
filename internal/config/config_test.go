@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -138,5 +140,97 @@ func TestValidateRejectsSamePresetsAndLowHTTPPort(t *testing.T) {
 	cfg.HTTPPort = DefaultHTTPPort
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEncryptedConfigRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.bin")
+	runtimePath := filepath.Join(t.TempDir(), "runtime.json")
+	key := bytes.Repeat([]byte{0x42}, 32)
+	initial := Default()
+	initial.SmpHost = "192.0.2.20"
+	initial.SmpUsername = "admin"
+	initial.SmpPassword = "secret"
+
+	store, err := LoadWithOptions(path, LoadOptions{
+		EncryptionKey: key,
+		RuntimePath:   runtimePath,
+		InitialConfig: &initial,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Get().SmpPassword; got != "secret" {
+		t.Fatalf("password = %q, want secret", got)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEncryptedFileMagic(data) {
+		t.Fatal("configuration was not encrypted")
+	}
+	if bytes.Contains(data, []byte("secret")) {
+		t.Fatal("encrypted file contains plaintext password")
+	}
+
+	reloaded, err := LoadWithOptions(path, LoadOptions{EncryptionKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Get().SmpPassword; got != "secret" {
+		t.Fatalf("reloaded password = %q, want secret", got)
+	}
+
+	var runtime struct {
+		HTTPPort int `json:"httpPort"`
+	}
+	runtimeData, err := os.ReadFile(runtimePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(runtimeData, &runtime); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.HTTPPort != DefaultHTTPPort {
+		t.Fatalf("runtime HTTP port = %d, want %d", runtime.HTTPPort, DefaultHTTPPort)
+	}
+}
+
+func TestLoadEncryptsExistingPlaintextConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"smpPassword":"migrate-me"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key := bytes.Repeat([]byte{0x24}, 32)
+	if _, err := LoadWithOptions(path, LoadOptions{EncryptionKey: key}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEncryptedFileMagic(data) || bytes.Contains(data, []byte("migrate-me")) {
+		t.Fatal("plaintext configuration was not migrated to encrypted storage")
+	}
+}
+
+func TestEncryptedConfigRejectsTampering(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.bin")
+	key := bytes.Repeat([]byte{0x11}, 32)
+	if _, err := LoadWithOptions(path, LoadOptions{EncryptionKey: key}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 0xff
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadWithOptions(path, LoadOptions{EncryptionKey: key}); err == nil {
+		t.Fatal("expected tampered configuration to fail authentication")
 	}
 }

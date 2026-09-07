@@ -38,13 +38,40 @@ android {
         viewBinding = true
     }
 
-    // The served pages live in the repository's web directory, shared with the
-    // standalone Go server, and ship in the APK as assets.
     sourceSets {
         getByName("main") {
-            assets.srcDir(rootProject.file("web"))
+            jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
         }
     }
+
+    packaging {
+        jniLibs {
+            // The Go server is an executable named like a native library so
+            // Android extracts it to the app's executable nativeLibraryDir.
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/libstreaming.so"
+        }
+    }
+}
+
+val buildAndroidGoServer by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Cross-compiles the Go control server for Android ARM64"
+    workingDir(rootProject.projectDir)
+    commandLine("bash", rootProject.file("scripts/build-android-go.sh").absolutePath)
+
+    inputs.files(
+        rootProject.fileTree(".") {
+            include("*.go", "go.mod", "go.sum")
+            include("internal/**/*.go", "web/**")
+            exclude("app/**", "build/**")
+        },
+    )
+    outputs.file(layout.buildDirectory.file("generated/jniLibs/arm64-v8a/libstreaming.so"))
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(buildAndroidGoServer)
 }
 
 dependencies {
@@ -53,7 +80,4 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("org.nanohttpd:nanohttpd:2.3.1")
-    implementation("com.github.mwiede:jsch:0.2.16")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }

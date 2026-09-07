@@ -6,6 +6,11 @@ on:
     branches:
       - main
     paths:
+      - "*.go"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - "scripts/build-android-go.sh"
       - "app/**"
       - "web/**"
       - "build.gradle.kts"
@@ -16,6 +21,11 @@ on:
       - ".github/workflows/build-android.yml"
   pull_request:
     paths:
+      - "*.go"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - "scripts/build-android-go.sh"
       - "app/**"
       - "web/**"
       - "build.gradle.kts"
@@ -45,14 +55,23 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.3.11579264"
 
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v6
+
+      - name: Test Go controller
+        run: go test ./...
 
       - name: Build installable debug APK
         run: ./gradlew --no-daemon assembleDebug
