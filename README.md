@@ -16,7 +16,8 @@ ARM64 executable supervised by the Android app.
   the on-screen preview.
 - Credentials are encrypted and stored only on the Android device.
 - Fully Kiosk Browser uses `http://127.0.0.1:8080/` for daily operation.
-- The server starts again after tablet reboot.
+- The server starts again after a reboot, after an app update, and every
+  fifteen minutes a background check restarts it if it stopped answering.
 - Preset 1 is Mandarin and preset 2 is English by default. Both presets must
   already be configured through the native SMP web interface.
 
@@ -61,6 +62,28 @@ create a release.
 
 If Fully Kiosk runs on another tablet, use
 `http://<server-tablet-ip>:8080/` instead.
+
+## Keeping the server running unattended
+
+The app restarts itself after a reboot, but Android will only let it do so if
+the tablet is set up for unattended use.
+
+- **Remove the screen lock.** Settings → Security → Screen lock → None. App
+  storage stays encrypted until the first unlock, so a tablet sitting at the
+  lock screen after a power cut never delivers the boot broadcast and the
+  server never starts.
+- **Accept the battery prompt** shown the first time the app opens. On tablets
+  without that dialog, turn on **Allow background usage** under App info →
+  Battery for Streaming.
+- **Allow notifications.** The server runs as a foreground service, and Android
+  stops the service if its notification is blocked.
+- **Never use Force stop.** Android then withholds boot broadcasts from the app
+  until someone opens it by hand.
+
+To confirm the tablet behaves after a power cut, reboot it, wait a minute
+without touching the screen, and load `http://127.0.0.1:8080/` from Fully
+Kiosk. Over adb, `adb logcat -s StreamingBootReceiver StreamingWatchdog` shows
+which trigger started the server.
 
 ## Standalone Go server
 

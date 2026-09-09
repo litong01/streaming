@@ -1,9 +1,14 @@
 package com.streaming.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
+import android.util.Log
 import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -34,6 +39,7 @@ class MainActivity : AppCompatActivity() {
 
         StreamingForegroundService.start(this)
         requestNotificationPermissionIfNeeded()
+        requestBatteryExemptionIfNeeded()
         waitForServerAndLoadConfiguration()
     }
 
@@ -54,6 +60,34 @@ class MainActivity : AppCompatActivity() {
             if (!granted) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
+        }
+    }
+
+    /**
+     * An exempt app is allowed to start its foreground service from the
+     * background, which is what the watchdog relies on after Android kills
+     * the server. Asked once per install so a decline is not nagged at.
+     */
+    private fun requestBatteryExemptionIfNeeded() {
+        val power = getSystemService(PowerManager::class.java) ?: return
+        if (power.isIgnoringBatteryOptimizations(packageName)) {
+            return
+        }
+
+        val prefs = getSharedPreferences(SETUP_PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_BATTERY_PROMPT_SHOWN, false)) {
+            return
+        }
+        prefs.edit().putBoolean(KEY_BATTERY_PROMPT_SHOWN, true).apply()
+
+        val intent = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:$packageName"),
+        )
+        try {
+            startActivity(intent)
+        } catch (error: Exception) {
+            Log.w(TAG, "This device has no battery optimization dialog", error)
         }
     }
 
@@ -99,6 +133,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val TAG = "StreamingMainActivity"
+        private const val SETUP_PREFS = "streaming_setup"
+        private const val KEY_BATTERY_PROMPT_SHOWN = "battery_prompt_shown"
         private const val SERVER_READY_ATTEMPTS = 30
         private const val SERVER_READY_RETRY_MS = 500L
         private const val SERVER_READY_TIMEOUT_MS = 400

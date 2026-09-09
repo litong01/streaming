@@ -34,7 +34,13 @@ class StreamingForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification())
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        } catch (error: Exception) {
+            Log.e(TAG, "Android rejected the foreground notification", error)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         startGoServer()
         return START_STICKY
     }
@@ -141,22 +147,7 @@ class StreamingForegroundService : Service() {
         }, "go-server-exit").start()
     }
 
-    private fun serverIsReady(port: Int): Boolean {
-        return try {
-            val connection = URL("http://127.0.0.1:$port/api/status")
-                .openConnection() as HttpURLConnection
-            connection.connectTimeout = HEALTH_CHECK_TIMEOUT_MS
-            connection.readTimeout = HEALTH_CHECK_TIMEOUT_MS
-            connection.useCaches = false
-            try {
-                connection.responseCode == HttpURLConnection.HTTP_OK
-            } finally {
-                connection.disconnect()
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
+    private fun serverIsReady(port: Int): Boolean = isServerListening(port)
 
     private fun scheduleRestart() {
         mainHandler.removeCallbacks(restartRunnable)
@@ -213,11 +204,37 @@ class StreamingForegroundService : Service() {
 
         fun start(context: Context) {
             val intent = Intent(context, StreamingForegroundService::class.java)
-            context.startForegroundService(intent)
+            try {
+                context.startForegroundService(intent)
+            } catch (error: Exception) {
+                // Android refuses background starts in some states. Losing this
+                // attempt is survivable: the watchdog tries again later.
+                Log.w(TAG, "Could not start the control server", error)
+            }
         }
 
         fun stop(context: Context) {
             context.stopService(Intent(context, StreamingForegroundService::class.java))
+        }
+
+        fun isServerListening(port: Int): Boolean {
+            if (port <= 0) {
+                return false
+            }
+            return try {
+                val connection = URL("http://127.0.0.1:$port/api/status")
+                    .openConnection() as HttpURLConnection
+                connection.connectTimeout = HEALTH_CHECK_TIMEOUT_MS
+                connection.readTimeout = HEALTH_CHECK_TIMEOUT_MS
+                connection.useCaches = false
+                try {
+                    connection.responseCode == HttpURLConnection.HTTP_OK
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (_: Exception) {
+                false
+            }
         }
     }
 }
