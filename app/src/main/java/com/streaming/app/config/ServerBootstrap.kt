@@ -2,7 +2,9 @@ package com.streaming.app.config
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.UserManager
 import android.util.Base64
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONObject
@@ -20,16 +22,29 @@ class ServerBootstrap(context: Context) {
     )
 
     private val appContext = context.applicationContext
-    private val prefs = createPrefs(appContext)
-    private val serverDir = File(appContext.filesDir, "server")
+
+    /**
+     * The server state lives in device-protected storage, which the hardware
+     * key unlocks at power-on. Credential-protected storage would tie the SMP
+     * settings to the screen lock, at the cost of leaving the tablet without a
+     * control server until somebody signs in.
+     */
+    private val deviceContext = appContext.createDeviceProtectedStorageContext()
+    private val prefs = deviceContext.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
+    private val serverDir = File(deviceContext.filesDir, "server")
     private val configFile = File(serverDir, "config.bin")
     private val runtimeFile = File(serverDir, "runtime.json")
+
+    private val credentialServerDir = File(appContext.filesDir, "server")
+    private var cachedCredentialPrefs: SharedPreferences? = null
 
     @Synchronized
     fun prepare(): LaunchConfig {
         serverDir.mkdirs()
+        importCredentialStorage()
         val key = encryptionKey()
-        val legacyPort = prefs.getInt(KEY_HTTP_PORT, DEFAULT_HTTP_PORT)
+        val legacyPort = credentialPrefs()?.getInt(KEY_HTTP_PORT, DEFAULT_HTTP_PORT)
+            ?: DEFAULT_HTTP_PORT
         val import = if (!configFile.exists()) legacyConfig() else null
         return LaunchConfig(
             configFile = configFile,
@@ -43,7 +58,7 @@ class ServerBootstrap(context: Context) {
     fun currentHttpPort(fallback: Int = DEFAULT_HTTP_PORT): Int {
         return try {
             if (!runtimeFile.exists()) {
-                prefs.getInt(KEY_HTTP_PORT, fallback)
+                fallback
             } else {
                 JSONObject(runtimeFile.readText()).optInt("httpPort", fallback)
                     .takeIf { it in 1024..65535 } ?: fallback
@@ -56,10 +71,65 @@ class ServerBootstrap(context: Context) {
     @Synchronized
     fun completeLegacyMigration() {
         if (!configFile.exists()) return
-        prefs.edit().apply {
+        val credential = credentialPrefs() ?: return
+        credential.edit().apply {
             LEGACY_KEYS.forEach { remove(it) }
             putBoolean(KEY_MIGRATION_COMPLETE, true)
         }.apply()
+    }
+
+    /**
+     * Moves an existing configuration out of credential-protected storage the
+     * first time the tablet is unlocked after the update. The key and the
+     * configuration file are copied together, because either one alone leaves
+     * the server with a file it cannot decrypt.
+     */
+    private fun importCredentialStorage() {
+        if (prefs.getBoolean(KEY_IMPORT_COMPLETE, false)) return
+        val credential = credentialPrefs() ?: return
+
+        val credentialConfig = File(credentialServerDir, configFile.name)
+        val credentialKey = credential.getString(KEY_SERVER_KEY, null)
+        if (credentialConfig.exists() && credentialKey != null) {
+            try {
+                check(prefs.edit().putString(KEY_SERVER_KEY, credentialKey).commit()) {
+                    "Could not persist the imported configuration key"
+                }
+                credentialConfig.copyTo(configFile, overwrite = true)
+                File(credentialServerDir, runtimeFile.name)
+                    .takeIf(File::exists)
+                    ?.copyTo(runtimeFile, overwrite = true)
+                Log.i(TAG, "Imported the configuration into device-protected storage")
+            } catch (error: Exception) {
+                // A key and a configuration file that do not match stop the
+                // server from starting at all, so drop the file and let it
+                // begin from defaults instead. Retried on the next start.
+                Log.w(TAG, "Could not import the existing configuration", error)
+                configFile.delete()
+                return
+            }
+        }
+        prefs.edit().putBoolean(KEY_IMPORT_COMPLETE, true).apply()
+    }
+
+    /**
+     * Opens the old credential-protected preferences, which only exist on
+     * tablets updated from an earlier build and can only be read once the
+     * user has signed in. Never created from scratch, so a fresh install
+     * neither needs a Keystore key nor waits for an unlock.
+     */
+    private fun credentialPrefs(): SharedPreferences? {
+        cachedCredentialPrefs?.let { return it }
+        val userManager = appContext.getSystemService(UserManager::class.java)
+        if (userManager != null && !userManager.isUserUnlocked) return null
+        val file = File(File(appContext.dataDir, "shared_prefs"), "$CREDENTIAL_PREFS_FILE.xml")
+        if (!file.exists()) return null
+        return try {
+            createCredentialPrefs(appContext).also { cachedCredentialPrefs = it }
+        } catch (error: Exception) {
+            Log.w(TAG, "Could not open the credential-protected preferences", error)
+            null
+        }
     }
 
     private fun encryptionKey(): String {
@@ -74,16 +144,17 @@ class ServerBootstrap(context: Context) {
     }
 
     private fun legacyConfig(): String? {
-        if (prefs.getBoolean(KEY_MIGRATION_COMPLETE, false)) return null
-        val hasLegacyConfig = LEGACY_KEYS.any(prefs::contains)
+        val legacy = credentialPrefs() ?: return null
+        if (legacy.getBoolean(KEY_MIGRATION_COMPLETE, false)) return null
+        val hasLegacyConfig = LEGACY_KEYS.any(legacy::contains)
         if (!hasLegacyConfig) return null
 
-        var englishPreset = prefs.getInt(KEY_ENGLISH_PRESET, DEFAULT_ENGLISH_PRESET)
-        var mandarinPreset = prefs.getInt(KEY_MANDARIN_PRESET, DEFAULT_MANDARIN_PRESET)
+        var englishPreset = legacy.getInt(KEY_ENGLISH_PRESET, DEFAULT_ENGLISH_PRESET)
+        var mandarinPreset = legacy.getInt(KEY_MANDARIN_PRESET, DEFAULT_MANDARIN_PRESET)
         if (
-            prefs.getInt(KEY_CONFIG_VERSION, 1) < CURRENT_SCHEMA_VERSION &&
-            prefs.contains(KEY_ENGLISH_PRESET) &&
-            prefs.contains(KEY_MANDARIN_PRESET) &&
+            legacy.getInt(KEY_CONFIG_VERSION, 1) < CURRENT_SCHEMA_VERSION &&
+            legacy.contains(KEY_ENGLISH_PRESET) &&
+            legacy.contains(KEY_MANDARIN_PRESET) &&
             englishPreset == 1 &&
             mandarinPreset == 2
         ) {
@@ -92,17 +163,17 @@ class ServerBootstrap(context: Context) {
         }
         val config = JSONObject()
             .put("schemaVersion", CURRENT_SCHEMA_VERSION)
-            .put("smpHost", prefs.getString(KEY_SMP_HOST, "") ?: "")
-            .put("smpSshPort", prefs.getInt(KEY_SMP_SSH_PORT, DEFAULT_SMP_SSH_PORT))
-            .put("smpUsername", prefs.getString(KEY_SMP_USERNAME, "") ?: "")
-            .put("smpPassword", prefs.getString(KEY_SMP_PASSWORD, "") ?: "")
-            .put("httpPort", prefs.getInt(KEY_HTTP_PORT, DEFAULT_HTTP_PORT))
+            .put("smpHost", legacy.getString(KEY_SMP_HOST, "") ?: "")
+            .put("smpSshPort", legacy.getInt(KEY_SMP_SSH_PORT, DEFAULT_SMP_SSH_PORT))
+            .put("smpUsername", legacy.getString(KEY_SMP_USERNAME, "") ?: "")
+            .put("smpPassword", legacy.getString(KEY_SMP_PASSWORD, "") ?: "")
+            .put("httpPort", legacy.getInt(KEY_HTTP_PORT, DEFAULT_HTTP_PORT))
             .put("streamIndex", 1)
             .put("englishPreset", englishPreset)
             .put("mandarinPreset", mandarinPreset)
             .put(
                 "pollIntervalSeconds",
-                prefs.getInt(KEY_POLL_INTERVAL_SECONDS, DEFAULT_POLL_INTERVAL_SECONDS),
+                legacy.getInt(KEY_POLL_INTERVAL_SECONDS, DEFAULT_POLL_INTERVAL_SECONDS),
             )
         return Base64.encodeToString(config.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
     }
@@ -110,8 +181,11 @@ class ServerBootstrap(context: Context) {
     companion object {
         const val DEFAULT_HTTP_PORT = 8080
 
-        private const val PREFS_FILE = "streaming_secure_prefs"
+        private const val TAG = "StreamingBootstrap"
+        private const val PREFS_FILE = "streaming_server_prefs"
+        private const val CREDENTIAL_PREFS_FILE = "streaming_secure_prefs"
         private const val KEY_SERVER_KEY = "go_server_config_key"
+        private const val KEY_IMPORT_COMPLETE = "device_storage_import_complete"
         private const val KEY_MIGRATION_COMPLETE = "go_server_migration_complete"
         private const val KEY_CONFIG_VERSION = "config_version"
         private const val KEY_SMP_HOST = "smp_host"
@@ -143,13 +217,13 @@ class ServerBootstrap(context: Context) {
             KEY_POLL_INTERVAL_SECONDS,
         )
 
-        private fun createPrefs(context: Context): SharedPreferences {
+        private fun createCredentialPrefs(context: Context): SharedPreferences {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
             return EncryptedSharedPreferences.create(
                 context,
-                PREFS_FILE,
+                CREDENTIAL_PREFS_FILE,
                 masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,

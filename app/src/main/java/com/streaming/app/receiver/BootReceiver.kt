@@ -11,8 +11,8 @@ import com.streaming.app.service.StreamingForegroundService
 /**
  * Starts the control server again after a reboot or an app update. Generic
  * tablets do not all send the same broadcast, so several are accepted. The
- * server configuration lives in credential-encrypted storage, which is only
- * readable once the user has unlocked the device the first time.
+ * server keeps its state in device-protected storage, so LOCKED_BOOT_COMPLETED
+ * is enough to bring it up on a tablet that is still at its screen lock.
  */
 class BootReceiver : BroadcastReceiver() {
 
@@ -22,16 +22,15 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
 
-        val app = context.applicationContext as? StreamingApplication
-        if (app?.isUserUnlocked() == false) {
-            // Storage is still encrypted. BOOT_COMPLETED arrives at unlock.
-            Log.i(TAG, "Ignoring $action until the device is unlocked")
-            return
-        }
-
         Log.i(TAG, "Starting the control server after $action")
         StreamingForegroundService.start(context)
-        ServerWatchdogWorker.schedule(context)
+
+        // WorkManager keeps its database in credential-protected storage, so
+        // the watchdog can only be scheduled once someone has signed in.
+        val app = context.applicationContext as? StreamingApplication
+        if (app == null || app.isUserUnlocked()) {
+            ServerWatchdogWorker.schedule(context)
+        }
     }
 
     private companion object {

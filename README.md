@@ -14,10 +14,11 @@ ARM64 executable supervised by the Android app.
 - The configuration page collects the SMP address, SSH credentials, server
   port, preset numbers, and the SMP confidence/secondary stream URL used for
   the on-screen preview.
-- Credentials are encrypted and stored only on the Android device.
+- Credentials never leave the Android device.
 - Fully Kiosk Browser uses `http://127.0.0.1:8080/` for daily operation.
-- The server starts again after a reboot, after an app update, and every
-  fifteen minutes a background check restarts it if it stopped answering.
+- The server starts during boot, before anyone signs in, and again after an app
+  update. Every fifteen minutes a background check restarts it if it stopped
+  answering.
 - Preset 1 is Mandarin and preset 2 is English by default. Both presets must
   already be configured through the native SMP web interface.
 
@@ -65,25 +66,34 @@ If Fully Kiosk runs on another tablet, use
 
 ## Keeping the server running unattended
 
-The app restarts itself after a reboot, but Android will only let it do so if
-the tablet is set up for unattended use.
+The app restarts itself during boot, but Android will only let it do so if the
+tablet is set up for unattended use.
 
-- **Remove the screen lock.** Settings → Security → Screen lock → None. App
-  storage stays encrypted until the first unlock, so a tablet sitting at the
-  lock screen after a power cut never delivers the boot broadcast and the
-  server never starts.
-- **Accept the battery prompt** shown the first time the app opens. On tablets
-  without that dialog, turn on **Allow background usage** under App info →
-  Battery for Streaming.
+- **A screen lock is fine.** The server is direct boot aware: it keeps its
+  settings in device-protected storage, which Android decrypts at power-on
+  without a PIN, so the control page answers while the tablet still sits at its
+  lock screen.
+- **Allow autostart.** Many tablets gate boot broadcasts behind a vendor
+  setting, usually App info → Autostart or a bundled Security app. Android
+  delivers nothing to the app until it is switched on.
+- **Accept the battery prompt** shown the first time the app opens. That dialog
+  is offered once per install, so afterwards turn on **Allow background usage**
+  under App info → Battery for Streaming instead.
 - **Allow notifications.** The server runs as a foreground service, and Android
   stops the service if its notification is blocked.
 - **Never use Force stop.** Android then withholds boot broadcasts from the app
   until someone opens it by hand.
 
-To confirm the tablet behaves after a power cut, reboot it, wait a minute
-without touching the screen, and load `http://127.0.0.1:8080/` from Fully
-Kiosk. Over adb, `adb logcat -s StreamingBootReceiver StreamingWatchdog` shows
-which trigger started the server.
+To confirm the tablet behaves after a power cut, reboot it, leave it at the
+lock screen for a minute, and check that `http://127.0.0.1:8080/api/status`
+answers from another machine on the network. Over adb,
+`adb logcat -s StreamingBootReceiver StreamingForegroundSvc StreamingWatchdog`
+shows which trigger started the server.
+
+Because the settings sit in device-protected storage, they are guarded by the
+app sandbox and the tablet's hardware key rather than by the screen lock. That
+is the trade for a server that runs without anyone signing in. Reading them
+needs root or an unlocked bootloader.
 
 ## Standalone Go server
 
@@ -112,8 +122,11 @@ are packaged as `lib/arm64-v8a/libstreaming.so` and `lib/arm64-v8a/libgo2rtc.so`
 so Android extracts them into the app's executable native-library directory.
 
 On upgrade from the earlier Kotlin-server APK, existing encrypted SMP settings
-are imported once. The Go configuration file is encrypted with an AES-GCM key
-kept in Android Keystore-backed preferences.
+are imported once. The Go configuration file is encrypted with an AES-GCM key,
+and both live in device-protected storage so the service can read them during
+boot. Settings written by an older build sit in credential-protected storage
+and are copied across the first time the updated app runs with the tablet
+unlocked, which is the moment the APK is installed.
 
 ## SMP commands
 

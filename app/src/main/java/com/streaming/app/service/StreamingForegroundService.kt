@@ -110,15 +110,17 @@ class StreamingForegroundService : Service() {
 
     private fun monitorServer(process: Process, initialPort: Int) {
         Thread({
-            var migrated = false
+            var signedInWorkDone = false
             var lastPort = initialPort
             while (!stopping && process.isAlive && serverProcess === process) {
                 val app = application as StreamingApplication
                 val port = app.serverBootstrap.currentHttpPort(lastPort)
                 if (serverIsReady(port)) {
-                    if (!migrated) {
-                        app.serverBootstrap.completeLegacyMigration()
-                        migrated = true
+                    // A server that came up at boot could reach neither the old
+                    // credential-protected settings nor WorkManager's database,
+                    // so both wait here for the first sign-in.
+                    if (!signedInWorkDone && app.isUserUnlocked()) {
+                        signedInWorkDone = runSignedInWork(app)
                     }
                     if (port != lastPort || notificationPort != port) {
                         lastPort = port
@@ -132,6 +134,23 @@ class StreamingForegroundService : Service() {
                 }
             }
         }, "go-server-health").start()
+    }
+
+    /**
+     * The libraries behind WorkManager are only installed into a process that
+     * started before the first sign-in once that sign-in happens, and this
+     * runs on the health thread as soon as the user is reported unlocked. The
+     * two can race, so a failed attempt is retried on the next health check.
+     */
+    private fun runSignedInWork(app: StreamingApplication): Boolean {
+        return try {
+            app.serverBootstrap.completeLegacyMigration()
+            ServerWatchdogWorker.schedule(applicationContext)
+            true
+        } catch (error: Exception) {
+            Log.w(TAG, "Deferring the work that needs a signed-in user", error)
+            false
+        }
     }
 
     private fun monitorExit(process: Process) {

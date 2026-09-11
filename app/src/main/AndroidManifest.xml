@@ -29,8 +29,15 @@
             </intent-filter>
         </activity>
 
+        <!--
+            Direct boot aware so the server is running before anyone signs in.
+            Its state is kept in device-protected storage for the same reason,
+            and the notification it posts is allowed while the device is
+            locked. Nothing here may touch credential-protected storage.
+        -->
         <service
             android:name=".service.StreamingForegroundService"
+            android:directBootAware="true"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
