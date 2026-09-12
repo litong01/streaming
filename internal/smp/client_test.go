@@ -38,7 +38,7 @@ func TestSMP351StreamCommandsUseSISControlBytes(t *testing.T) {
 	}
 }
 
-func TestStartRecallsLanguageOnArchiveAndPreviewOnConfidence(t *testing.T) {
+func TestStartRecallsLanguageOnArchiveOnly(t *testing.T) {
 	tests := []struct {
 		name           string
 		start          func(*Client, config.Config) State
@@ -57,11 +57,8 @@ func TestStartRecallsLanguageOnArchiveAndPreviewOnConfidence(t *testing.T) {
 
 			state := test.start(encoders.client(), cfg)
 			want := []string{
-				// Both encoders are read before either is disturbed.
+				// The encoder is read before it is disturbed.
 				"\x1b1STRC\r", "46I",
-				"\x1b3STRC\r", "48I",
-				// Confidence is brought up first so the preview has a feed.
-				"\x1b3*0STRC\r", "3*3*3.", "\x1b3*1STRC\r",
 				"\x1b1*0STRC\r", fmt.Sprintf("3*1*%d.", test.languagePreset), "\x1b1*1STRC\r",
 				// Then the result is confirmed rather than assumed.
 				"\x1b1STRC\r", "46I",
@@ -76,31 +73,30 @@ func TestStartRecallsLanguageOnArchiveAndPreviewOnConfidence(t *testing.T) {
 	}
 }
 
-// A language switch used to stop, re-recall, and restart the Confidence
-// encoder even though it was already serving the right preset, which broke the
-// feed the on-screen preview plays for no reason.
-func TestStartLeavesAWorkingConfidenceEncoderAlone(t *testing.T) {
+// The Confidence encoder belongs to whoever configured the unit. Nothing the
+// app does may read it, recall onto it, or switch it, whatever state it is in.
+func TestStartAndStopNeverTouchTheConfidenceEncoder(t *testing.T) {
 	withoutStartConfirmWait(t)
 	cfg := configuredTestConfig()
 	encoders := newFakeEncoders()
 	encoders.streaming(archiveStreamIndex, cfg.MandarinPreset)
-	encoders.streaming(confidenceStreamIndex, cfg.ConfidencePreset)
+	encoders.streaming(confidenceStreamIndex, 7)
 
-	state := encoders.client().StartEnglish(cfg)
-	if state.LastError != nil {
+	client := encoders.client()
+	if state := client.StartEnglish(cfg); state.LastError != nil {
 		t.Fatalf("start failed: %s", *state.LastError)
 	}
-	want := []string{
-		"\x1b1STRC\r", "46I",
-		"\x1b3STRC\r", "48I",
-		"\x1b1*0STRC\r", fmt.Sprintf("3*1*%d.", cfg.EnglishPreset), "\x1b1*1STRC\r",
-		"\x1b1STRC\r", "46I",
+	if err := client.stopArchive(cfg); err != nil {
+		t.Fatalf("stop failed: %v", err)
 	}
-	if strings.Join(encoders.commands, "|") != strings.Join(want, "|") {
-		t.Fatalf("commands = %q, want %q", encoders.commands, want)
+	for _, command := range encoders.commands {
+		if strings.Contains(command, "3STRC") || strings.HasPrefix(command, "3*3*") || command == "48I" {
+			t.Errorf("touched the Confidence encoder: %q", printable(command))
+		}
 	}
-	if state.ActiveStream != ActiveEnglish {
-		t.Fatalf("state = %#v", state)
+	if !encoders.enabled[confidenceStreamIndex] || encoders.recalled[confidenceStreamIndex] != 7 {
+		t.Errorf("Confidence encoder changed: enabled=%v preset=%d",
+			encoders.enabled[confidenceStreamIndex], encoders.recalled[confidenceStreamIndex])
 	}
 }
 
@@ -110,7 +106,6 @@ func TestStartDoesNothingWhenThatLanguageIsAlreadyLive(t *testing.T) {
 	cfg := configuredTestConfig()
 	encoders := newFakeEncoders()
 	encoders.streaming(archiveStreamIndex, cfg.EnglishPreset)
-	encoders.streaming(confidenceStreamIndex, cfg.ConfidencePreset)
 
 	started := time.Now()
 	state := encoders.client().StartEnglish(cfg)
@@ -119,7 +114,7 @@ func TestStartDoesNothingWhenThatLanguageIsAlreadyLive(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Errorf("took %s, want no settle delay", elapsed)
 	}
-	want := []string{"\x1b1STRC\r", "46I", "\x1b3STRC\r", "48I"}
+	want := []string{"\x1b1STRC\r", "46I"}
 	if strings.Join(encoders.commands, "|") != strings.Join(want, "|") {
 		t.Fatalf("commands = %q, want %q", encoders.commands, want)
 	}
@@ -131,8 +126,14 @@ func TestStartDoesNothingWhenThatLanguageIsAlreadyLive(t *testing.T) {
 	}
 }
 
+// The Confidence encoder is stream 3. Production code no longer names it,
+// because nothing in the app may touch it; the fake still models it so that
+// can be proved.
+const confidenceStreamIndex = 3
+
 // fakeEncoders models the pair of encoders closely enough to exercise the
-// decisions a start makes. Switching one off marks its configuration as
+// decisions a start makes. Both are modelled so a test can prove the
+// Confidence encoder is never touched. Switching one off marks its configuration as
 // drifted from the saved preset, which is what the unit itself reports.
 type fakeEncoders struct {
 	enabled  map[int]bool
@@ -253,7 +254,7 @@ func withoutStartConfirmWait(t *testing.T) {
 	t.Cleanup(func() { startConfirmWait = previous })
 }
 
-func TestStopDisablesArchiveAndConfidence(t *testing.T) {
+func TestStopDisablesArchiveOnly(t *testing.T) {
 	var commands []string
 	client := &Client{send: func(
 		_ config.Config,
@@ -272,7 +273,7 @@ func TestStopDisablesArchiveAndConfidence(t *testing.T) {
 	}}
 
 	state := client.Stop(configuredTestConfig())
-	want := []string{"\x1b1*0STRC\r", "\x1b3*0STRC\r", "\x1b1STRC\r", "46I"}
+	want := []string{"\x1b1*0STRC\r", "\x1b1STRC\r", "46I"}
 	if strings.Join(commands, "|") != strings.Join(want, "|") {
 		t.Fatalf("commands = %q, want %q", commands, want)
 	}

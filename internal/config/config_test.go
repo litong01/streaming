@@ -10,12 +10,11 @@ import (
 
 func TestDefaultPresetMapping(t *testing.T) {
 	cfg := Default()
-	if cfg.EnglishPreset != 2 || cfg.MandarinPreset != 1 || cfg.ConfidencePreset != 3 {
+	if cfg.EnglishPreset != 2 || cfg.MandarinPreset != 1 {
 		t.Fatalf(
-			"unexpected defaults: English=%d Mandarin=%d Confidence=%d",
+			"unexpected defaults: English=%d Mandarin=%d",
 			cfg.EnglishPreset,
 			cfg.MandarinPreset,
-			cfg.ConfidencePreset,
 		)
 	}
 }
@@ -142,9 +141,9 @@ func TestValidateRejectsSamePresetsAndLowHTTPPort(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.ConfidencePreset = cfg.EnglishPreset
+	cfg.MandarinPreset = cfg.EnglishPreset
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected Confidence preset collision error")
+		t.Fatal("expected preset collision error")
 	}
 }
 

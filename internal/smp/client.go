@@ -20,14 +20,13 @@ import (
 )
 
 const (
-	connectTimeout        = 10 * time.Second
-	readTimeout           = 5 * time.Second
-	webProbeTimeout       = 2 * time.Second
-	greetingWindow        = 1 * time.Second
-	probeWindow           = 2 * time.Second
-	partialLineWindow     = 500 * time.Millisecond
-	archiveStreamIndex    = 1
-	confidenceStreamIndex = 3
+	connectTimeout     = 10 * time.Second
+	readTimeout        = 5 * time.Second
+	webProbeTimeout    = 2 * time.Second
+	greetingWindow     = 1 * time.Second
+	probeWindow        = 2 * time.Second
+	partialLineWindow  = 500 * time.Millisecond
+	archiveStreamIndex = 1
 )
 
 var (
@@ -159,7 +158,7 @@ func (c *Client) Stop(cfg config.Config) State {
 		return failed("Stop failed", err)
 	}
 	defer closeAction()
-	if err := actionClient.stopBoth(cfg); err != nil {
+	if err := actionClient.stopArchive(cfg); err != nil {
 		return failed("Stop failed", err)
 	}
 	return actionClient.queryState(cfg)
@@ -180,39 +179,22 @@ func (c *Client) start(cfg config.Config, preset int, expected ActiveStream) Sta
 }
 
 func (c *Client) startPreset(cfg config.Config, preset int, expected ActiveStream) State {
-	// Read both encoders before disturbing either. Recalling a preset means
-	// switching the encoder off first, so an encoder that is already running
-	// what was asked for is left alone: re-tapping the live language must not
-	// interrupt the push, and a language switch must not break the Confidence
-	// feed the on-screen preview is playing.
+	// Only the Archive encoder is ever touched. The Confidence encoder is left
+	// exactly as the operator configured it on the unit, because the preview
+	// no longer depends on it.
+	//
+	// Read before disturbing anything: recalling a preset means switching the
+	// encoder off first, so an encoder already running what was asked for is
+	// left alone rather than having its push interrupted.
 	archive, err := c.readStream(cfg, archiveStreamIndex)
 	if err != nil {
 		return failed("Start failed", err)
 	}
-	confidence, err := c.readStream(cfg, confidenceStreamIndex)
-	if err != nil {
-		return failed("Start failed", err)
-	}
-	if archive.running(preset) && confidence.running(cfg.ConfidencePreset) {
+	if archive.running(preset) {
 		return alreadyStreaming(preset, expected)
 	}
-
-	startedConfidence := false
-	if !confidence.running(cfg.ConfidencePreset) {
-		if err := c.restartStream(cfg, confidenceStreamIndex, cfg.ConfidencePreset); err != nil {
-			return failed("Start failed", err)
-		}
-		startedConfidence = true
-	}
-	if !archive.running(preset) {
-		if err := c.restartStream(cfg, archiveStreamIndex, preset); err != nil {
-			// Do not leave a preview encoder running for a stream that never
-			// started, but do not switch off one that was already running.
-			if startedConfidence {
-				_, _ = c.setStreamEnabled(cfg, confidenceStreamIndex, false)
-			}
-			return failed("Start failed", err)
-		}
+	if err := c.restartStream(cfg, archiveStreamIndex, preset); err != nil {
+		return failed("Start failed", err)
 	}
 
 	// The unit reports an encoder as enabled the moment it is switched on,
@@ -239,7 +221,7 @@ func (c *Client) startPreset(cfg config.Config, preset int, expected ActiveStrea
 // restartStream puts one encoder onto a preset. It is switched off first
 // because the SMP refuses to rewrite a destination while that encoder is live.
 func (c *Client) restartStream(cfg config.Config, streamIndex, preset int) error {
-	name := streamName(streamIndex)
+	const name = "Archive"
 	if _, err := c.setStreamEnabled(cfg, streamIndex, false); err != nil {
 		return fmt.Errorf("stop %s encoder: %w", name, err)
 	}
@@ -270,7 +252,7 @@ func (s streamState) running(preset int) bool {
 }
 
 func (c *Client) readStream(cfg config.Config, streamIndex int) (streamState, error) {
-	name := streamName(streamIndex)
+	const name = "Archive"
 	enabled, err := c.queryStreamEnabled(cfg, streamIndex)
 	if err != nil {
 		return streamState{}, fmt.Errorf("read %s encoder: %w", name, err)
@@ -280,13 +262,6 @@ func (c *Client) readStream(cfg config.Config, streamIndex int) (streamState, er
 		return streamState{}, fmt.Errorf("read %s preset: %w", name, err)
 	}
 	return streamState{enabled: enabled, preset: preset}, nil
-}
-
-func streamName(streamIndex int) string {
-	if streamIndex == confidenceStreamIndex {
-		return "Confidence"
-	}
-	return "Archive"
 }
 
 func languageStatus(stream ActiveStream, preset int) string {
@@ -309,16 +284,13 @@ func alreadyStreaming(preset int, expected ActiveStream) State {
 	}
 }
 
-func (c *Client) stopBoth(cfg config.Config) error {
-	_, archiveErr := c.setStreamEnabled(cfg, archiveStreamIndex, false)
-	_, confidenceErr := c.setStreamEnabled(cfg, confidenceStreamIndex, false)
-	if archiveErr != nil {
-		archiveErr = fmt.Errorf("stop Archive encoder: %w", archiveErr)
+// stopArchive switches off the encoder that pushes to YouTube. The Confidence
+// encoder is deliberately left untouched.
+func (c *Client) stopArchive(cfg config.Config) error {
+	if _, err := c.setStreamEnabled(cfg, archiveStreamIndex, false); err != nil {
+		return fmt.Errorf("stop Archive encoder: %w", err)
 	}
-	if confidenceErr != nil {
-		confidenceErr = fmt.Errorf("stop Confidence encoder: %w", confidenceErr)
-	}
-	return errors.Join(archiveErr, confidenceErr)
+	return nil
 }
 
 func (c *Client) recallStreamingPreset(cfg config.Config, streamIndex, preset int) (string, error) {

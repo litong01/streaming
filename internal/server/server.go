@@ -262,14 +262,13 @@ func (s *Server) handleConfigAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 type configPayload struct {
-	SmpHost          string `json:"smpHost"`
-	SmpSSHPort       int    `json:"smpSshPort"`
-	SmpUsername      string `json:"smpUsername"`
-	SmpPassword      string `json:"smpPassword"`
-	HTTPPort         int    `json:"httpPort"`
-	EnglishPreset    int    `json:"englishPreset"`
-	MandarinPreset   int    `json:"mandarinPreset"`
-	ConfidencePreset int    `json:"confidencePreset"`
+	SmpHost        string `json:"smpHost"`
+	SmpSSHPort     int    `json:"smpSshPort"`
+	SmpUsername    string `json:"smpUsername"`
+	SmpPassword    string `json:"smpPassword"`
+	HTTPPort       int    `json:"httpPort"`
+	EnglishPreset  int    `json:"englishPreset"`
+	MandarinPreset int    `json:"mandarinPreset"`
 }
 
 // handleConfigTest probes the SMP with the values currently in the form so a
@@ -340,10 +339,6 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	next.StreamIndex = config.DefaultStreamIndex
 	next.EnglishPreset = payload.EnglishPreset
 	next.MandarinPreset = payload.MandarinPreset
-	next.ConfidencePreset = payload.ConfidencePreset
-	if next.ConfidencePreset == 0 {
-		next.ConfidencePreset = config.DefaultConfidencePreset
-	}
 	if err := next.Validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

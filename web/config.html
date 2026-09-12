@@ -126,10 +126,6 @@
         English preset number
         <input id="englishPreset" name="englishPreset" type="number" min="1" max="32" required>
       </label>
-      <label>
-        Confidence preview preset number
-        <input id="confidencePreset" name="confidencePreset" type="number" min="1" max="32" required>
-      </label>
 
       <div id="saveMessage"></div>
       <div id="testResult"></div>
@@ -192,7 +188,6 @@
       document.getElementById("httpPort").value = data.httpPort || 8080;
       document.getElementById("englishPreset").value = data.englishPreset || 2;
       document.getElementById("mandarinPreset").value = data.mandarinPreset || 1;
-      document.getElementById("confidencePreset").value = data.confidencePreset || 3;
     }
 
     form.addEventListener("submit", async (event) => {
@@ -210,8 +205,7 @@
         smpPassword: document.getElementById("smpPassword").value,
         httpPort: Number(document.getElementById("httpPort").value),
         englishPreset: Number(document.getElementById("englishPreset").value),
-        mandarinPreset: Number(document.getElementById("mandarinPreset").value),
-        confidencePreset: Number(document.getElementById("confidencePreset").value)
+        mandarinPreset: Number(document.getElementById("mandarinPreset").value)
       };
       const response = await fetch("/api/config", {
         method: "POST",

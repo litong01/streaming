@@ -17,9 +17,9 @@ ARM64 executable supervised by the Android app.
 - The server starts during boot, before anyone signs in, and again after an app
   update. Every fifteen minutes a background check restarts it if it stopped
   answering.
-- Preset 1 is Mandarin, preset 2 is English, and preset 3 is the Confidence
-  RTSP pull output by default. All three must already be configured through
-  the native SMP web interface.
+- Preset 1 is Mandarin and preset 2 is English by default. Both must already
+  be configured through the native SMP web interface. The Confidence encoder
+  is never touched by this app.
 
 The Android wrapper is Kotlin, but SMP commands, status polling, configuration
 APIs, and web serving are implemented only in Go. No Java or Android tooling is
@@ -59,10 +59,8 @@ create a release.
 2. Grant notification permission so Android can show the server's persistent
    foreground-service notification.
 3. Enter the SMP address (`host` or `host:22023`), username, password,
-   and the local server port (default `8080`). Paste the SMP confidence /
-   secondary RTSP URL from the SMP Device Status page (for example
-   `rtsp://192.168.1.10/extron2`). The SSH port is `22023` unless you include
-   a different one after the colon.
+   and the local server port (default `8080`). The SSH port is `22023` unless
+   you include a different one after the colon.
 4. Save the configuration.
 5. Point Fully Kiosk Browser at `http://127.0.0.1:8080/`.
 
@@ -130,12 +128,11 @@ unlocked, which is the moment the APK is installed.
 
 ## SMP commands
 
-For stream 1 (Archive Ch A), stream 3 (Confidence), and preset `P`:
+For stream 1 (Archive Ch A) and preset `P`:
 
 - Recall preset onto Archive: `3*1*P.`
-- Recall preset onto Confidence: `3*3*P.`
-- Enable Archive / Confidence: `E1*1STRC}` / `E3*1STRC}`
-- Disable Archive / Confidence: `E1*0STRC}` / `E3*0STRC}`
+- Enable Archive: `E1*1STRC}`
+- Disable Archive: `E1*0STRC}`
 - Query stream enabled: `E1STRC}`
 - Query selected streaming preset: `46I`
 
@@ -143,17 +140,17 @@ In Extron's command-table notation, `E` is the escape byte (`0x1b`), `}` is
 a carriage return (`0x0d`), and `]` in a response is CR/LF. They are not
 literal characters. The Go client sends and reads those control bytes.
 
-Starting a language reads both encoders first, then touches only what is
-wrong. An encoder that already runs the preset being asked for is left alone,
-because recalling a preset means switching the encoder off first: re-tapping
-the live language would otherwise interrupt the push, and a language switch
-would break the Confidence feed the preview is playing. So a switch between
-languages sends nine commands and never disturbs Confidence, while tapping the
-language that is already live sends four and changes nothing.
+Only the Archive encoder is ever touched. The Confidence encoder belongs to
+whoever configured the unit, and the app neither reads nor changes it.
+
+Starting a language reads the Archive encoder first and leaves it alone if it
+already runs the preset being asked for, because recalling a preset means
+switching the encoder off first and re-tapping the live language must not
+interrupt the push. So tapping the language already live sends two commands
+and changes nothing, while a switch sends five.
 
 An encoder that does need changing is switched off, given its preset, and
-switched back on, Confidence before Archive so the preview has a feed first.
-Three seconds later the Archive encoder is read back: the SMP reports an
+switched back on. Three seconds later it is read back: the SMP reports an
 encoder as enabled the moment it is switched on, which is before the
 destination has been contacted, so a push that is refused would otherwise be
 announced as a live stream.
@@ -163,8 +160,9 @@ whenever a live configuration has drifted from its saved preset. Switching an
 encoder off is itself enough to cause that, so anything uncertain falls through
 to a full recall.
 
-Stop disables both encoders. All commands from one button press share one SSH
-login to avoid exhausting the SMP's connection limit.
+Stop disables the Archive encoder and nothing else. All commands from one
+button press share one SSH login to avoid exhausting the SMP's connection
+limit.
 
 ## When the SMP signs in but answers nothing
 

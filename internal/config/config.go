@@ -19,7 +19,6 @@ const (
 	DefaultStreamIndex         = 1
 	DefaultEnglishPreset       = 2
 	DefaultMandarinPreset      = 1
-	DefaultConfidencePreset    = 3
 	DefaultPollIntervalSeconds = 3
 	CurrentSchemaVersion       = 3
 )
@@ -36,7 +35,6 @@ type Config struct {
 	StreamIndex         int    `json:"streamIndex"`
 	EnglishPreset       int    `json:"englishPreset"`
 	MandarinPreset      int    `json:"mandarinPreset"`
-	ConfidencePreset    int    `json:"confidencePreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
 }
 
@@ -48,7 +46,6 @@ type PublicConfig struct {
 	HTTPPort            int    `json:"httpPort"`
 	EnglishPreset       int    `json:"englishPreset"`
 	MandarinPreset      int    `json:"mandarinPreset"`
-	ConfidencePreset    int    `json:"confidencePreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
 	IsSmpConfigured     bool   `json:"isSmpConfigured"`
 }
@@ -75,7 +72,6 @@ func Default() Config {
 		StreamIndex:         DefaultStreamIndex,
 		EnglishPreset:       DefaultEnglishPreset,
 		MandarinPreset:      DefaultMandarinPreset,
-		ConfidencePreset:    DefaultConfidencePreset,
 		PollIntervalSeconds: DefaultPollIntervalSeconds,
 	}
 }
@@ -171,7 +167,6 @@ func (s *Store) Public() PublicConfig {
 		HTTPPort:            cfg.HTTPPort,
 		EnglishPreset:       cfg.EnglishPreset,
 		MandarinPreset:      cfg.MandarinPreset,
-		ConfidencePreset:    cfg.ConfidencePreset,
 		PollIntervalSeconds: cfg.PollIntervalSeconds,
 		IsSmpConfigured:     cfg.IsSmpConfigured(),
 	}
@@ -288,9 +283,6 @@ func withDefaults(cfg Config) Config {
 	}
 	if cfg.MandarinPreset == 0 {
 		cfg.MandarinPreset = DefaultMandarinPreset
-	}
-	if cfg.ConfidencePreset == 0 {
-		cfg.ConfidencePreset = DefaultConfidencePreset
 	}
 	if cfg.PollIntervalSeconds == 0 {
 		cfg.PollIntervalSeconds = DefaultPollIntervalSeconds
