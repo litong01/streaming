@@ -273,7 +273,7 @@
         return;
       }
       testButton.disabled = true;
-      renderResult("", [["hint", "Testing connection, up to about fifteen seconds..."]]);
+      renderResult("", [["hint", "Testing connection. Every SSH channel type the SMP might use is tried, so allow up to half a minute..."]]);
       try {
         const response = await fetch("/api/config/test", {
           method: "POST",

@@ -149,3 +149,45 @@ onto Archive, recalls the Confidence RTSP preset onto Confidence, then enables
 Confidence followed by Archive. Stop disables both encoders. All commands from
 one button press share one SSH login to avoid exhausting the SMP's connection
 limit. The on-screen player uses Confidence through go2rtc.
+
+## When the SMP signs in but answers nothing
+
+SSH login succeeding tells you the network, the port, and the credentials are
+right. It does not mean the SMP has attached its SIS session to that login, and
+the two failures look identical from outside: the unit accepts the channel and
+then stays silent.
+
+Firmware disagrees about which SSH channel carries the SIS session, so the
+server tries a plain shell, a shell with a terminal requested, and an exec
+channel, and keeps whichever one answered for later logins. Both output streams
+are read, because some firmware puts its copyright banner on standard error,
+where a reader watching only standard output cannot tell it from silence.
+
+**Test connection** on the configuration page reports which layer stopped the
+exchange, and for the SIS layer it distinguishes:
+
+- No reply on any channel type, not even the copyright banner. The SIS session
+  is not attaching to the login. Check that the account has SIS/Telnet rights
+  rather than web-only access, and that no other SSH session, Toolbelt window,
+  or second copy of this app holds the unit's SIS connection.
+- The banner arrives and plain commands such as `46I` answer, but the
+  escape-prefixed ones do not. The SMP is listening and the escape byte is
+  being lost on the way in.
+- Something came back that is not the expected response. The command format
+  needs correcting, and the test shows the exact bytes sent and received.
+
+`scripts/smp-sis.sh` reproduces all of this from a computer. Set `SMP_TTY=1` to
+request a terminal, which is what the second channel type above does.
+
+From a computer on the same network, `TestLiveSMP` prints the whole ladder
+against the real unit. It is skipped unless `SMP_HOST` is set, and it sends
+only queries, so it is safe to run during a service:
+
+```bash
+SMP_HOST=192.168.1.10 SMP_USER=admin SMP_PASSWORD_FILE=~/.smp-password \
+  go test -run TestLiveSMP ./internal/smp/ -v
+```
+
+Because the unit answers one session at a time, every exchange takes turns: a
+status poll is skipped rather than queued while a button press or a connection
+test is in flight.

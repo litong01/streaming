@@ -1,7 +1,6 @@
 package smp
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -24,7 +23,9 @@ const (
 	connectTimeout        = 10 * time.Second
 	readTimeout           = 5 * time.Second
 	webProbeTimeout       = 2 * time.Second
-	probeWindow           = 3 * time.Second
+	greetingWindow        = 1 * time.Second
+	probeWindow           = 2 * time.Second
+	partialLineWindow     = 500 * time.Millisecond
 	archiveStreamIndex    = 1
 	confidenceStreamIndex = 3
 )
@@ -58,23 +59,41 @@ type State struct {
 type commandSender func(config.Config, string, func(string) bool) (string, error)
 
 type Client struct {
+	// The SMP 351 keeps only a couple of SIS sessions. A second login that
+	// arrives while another is open is answered with E22 or with nothing at
+	// all, so the buttons, the poller, and the connection test take turns
+	// through this lock instead of competing for the unit.
+	mu   sync.Mutex
 	send commandSender
+	// transport is the SSH channel type this unit last answered on. It is
+	// remembered between logins because the poller opens a fresh one every
+	// few seconds and each wrong guess costs a read timeout.
+	transport sisTransport
+	settled   bool
 }
 
 func New() *Client {
 	return &Client{}
 }
 
-func (c *Client) QueryState(cfg config.Config) State {
+// QueryState reads the SMP's current state. The second result is false when
+// another exchange is already in flight: the unit answers one session at a
+// time, so a poll steps aside rather than queueing behind a button press or a
+// connection test and reporting a reading that is by then seconds old.
+func (c *Client) QueryState(cfg config.Config) (State, bool) {
 	if !cfg.IsSmpConfigured() {
-		return notConfigured()
+		return notConfigured(), true
 	}
+	if !c.mu.TryLock() {
+		return State{}, false
+	}
+	defer c.mu.Unlock()
 	actionClient, closeAction, err := c.actionClient(cfg)
 	if err != nil {
-		return failed("SMP is not reachable", err)
+		return failed("SMP is not reachable", err), true
 	}
 	defer closeAction()
-	return actionClient.queryState(cfg)
+	return actionClient.queryState(cfg), true
 }
 
 func (c *Client) queryState(cfg config.Config) State {
@@ -126,6 +145,8 @@ func (c *Client) Stop(cfg config.Config) State {
 	if !cfg.IsSmpConfigured() {
 		return notConfigured()
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	actionClient, closeAction, err := c.actionClient(cfg)
 	if err != nil {
 		return failed("Stop failed", err)
@@ -141,6 +162,8 @@ func (c *Client) start(cfg config.Config, preset int, expected ActiveStream) Sta
 	if !cfg.IsSmpConfigured() {
 		return notConfigured()
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	actionClient, closeAction, err := c.actionClient(cfg)
 	if err != nil {
 		return failed("Start failed", err)
@@ -262,6 +285,8 @@ type Diagnosis struct {
 // Diagnose walks the connection one layer at a time so a failure can be
 // attributed precisely. It never touches stored configuration.
 func (c *Client) Diagnose(cfg config.Config) Diagnosis {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if strings.TrimSpace(cfg.SmpHost) == "" {
 		return Diagnosis{Stage: StageAddress, Summary: "Enter the SMP address first."}
 	}
@@ -289,96 +314,223 @@ func (c *Client) Diagnose(cfg config.Config) Diagnosis {
 		return Diagnosis{Stage: StageHandshake, Address: addr, Summary: "Could not clear the connection deadline.", Detail: err.Error()}
 	}
 
-	query := streamEnabledQuery(cfg.StreamIndex)
-	raw, err := probeCommand(client, query, probeWindow)
-	if err != nil {
-		return Diagnosis{
-			Stage:   StageCommand,
-			Address: addr,
-			Summary: "Signed in to " + addr + ", but the SIS session could not be opened.",
-			Detail:  err.Error(),
-			Hint:    "SSH and the credentials are correct. Check that this account is allowed to issue SIS commands.",
+	return c.commandDiagnosis(client, cfg, addr)
+}
+
+// commandDiagnosis asks the same question over every channel type the SMP
+// might expect, and with a plain command as well as an escape-prefixed one.
+// Which combination answers is what separates "the SIS session never attached
+// to this channel" from "the SMP ignored these command bytes", and the two are
+// fixed in different places.
+func (c *Client) commandDiagnosis(client *ssh.Client, cfg config.Config, addr string) Diagnosis {
+	statusQuery := streamEnabledQuery(cfg.StreamIndex)
+	presetQuery := streamingPresetQueryCommand(cfg.StreamIndex)
+	var probes []sisProbe
+
+	for _, transport := range sisTransports {
+		status := probeSIS(client, transport, statusQuery)
+		probes = append(probes, status)
+		if matchesAnyLine(status.reply, matchesStreamStatus) {
+			// A successful test saves the buttons from repeating the search.
+			c.transport, c.settled = transport, true
+			return Diagnosis{
+				OK:      true,
+				Stage:   StageOK,
+				Address: addr,
+				Summary: addr + " answered correctly.",
+				Detail:  "over the " + transport.String() + ", received: " + printable(status.reply),
+			}
+		}
+		// A unit that says nothing at all on this channel has not started its
+		// SIS session, so a second command would be shouted into the same
+		// void. Only a channel that produced something is worth asking again.
+		if !status.spoke() {
+			continue
+		}
+		preset := probeSIS(client, transport, presetQuery)
+		probes = append(probes, preset)
+		if matchesAnyLine(preset.reply, presetResponseRegex.MatchString) {
+			return Diagnosis{
+				Stage:   StageCommand,
+				Address: addr,
+				Summary: "Signed in to " + addr + ", and plain SIS commands work, but escape-prefixed ones are ignored.",
+				Detail:  probeTranscript(probes),
+				Hint: "The SMP answered " + printable(presetQuery) + " over the " + transport.String() +
+					" but ignored " + printable(statusQuery) + ". The escape byte is being swallowed on the way in, " +
+					"which is a client-side fix rather than anything to change on the SMP.",
+			}
 		}
 	}
-	if strings.TrimSpace(raw) == "" {
-		return Diagnosis{
-			Stage:   StageCommand,
-			Address: addr,
-			Summary: "Signed in to " + addr + ", but the SMP sent nothing back.",
-			Detail:  "sent: " + printable(query),
-			Hint:    "The network, SSH, and the credentials are all correct, so only the SIS layer is left. Silence usually means the SMP did not recognise the command bytes.",
-		}
-	}
-	if !streamEnabledRegex.MatchString(raw) {
+
+	if unexpected, ok := firstReply(probes); ok {
 		return Diagnosis{
 			Stage:   StageCommand,
 			Address: addr,
 			Summary: "Signed in to " + addr + ", but the reply was not the expected SIS response.",
-			Detail:  "sent: " + printable(query) + "  received: " + printable(raw),
-			Hint:    "Everything up to the SIS command layer works. Send me the received text above and I can correct the command format.",
+			Detail:  probeTranscript(probes),
+			Hint:    "Everything up to the SIS command layer works, and the SMP is talking over the " + unexpected.transport.String() + ". Send me the received text above and I can correct the command format.",
+		}
+	}
+
+	if greeter, ok := firstGreeting(probes); ok {
+		return Diagnosis{
+			Stage:   StageCommand,
+			Address: addr,
+			Summary: "Signed in to " + addr + ", but the SMP answered neither query.",
+			Detail:  probeTranscript(probes),
+			Hint: "Its banner arrived over the " + greeter.transport.String() + ", so the login and the channel are right and " +
+				"the unit is discarding the commands themselves. A plain query went unanswered too, which points at SIS commands " +
+				"being disabled for this account rather than at the command format.",
 		}
 	}
 
 	return Diagnosis{
-		OK:      true,
-		Stage:   StageOK,
+		Stage:   StageCommand,
 		Address: addr,
-		Summary: addr + " answered correctly.",
-		Detail:  "received: " + printable(raw),
+		Summary: "Signed in to " + addr + ", but the SMP sent nothing back on any SSH channel.",
+		Detail:  probeTranscript(probes),
+		Hint: "The SMP never even sent its copyright banner, so its SIS session is not attaching to the login rather than " +
+			"misreading the commands. Check that this account has SIS/Telnet rights and not web-only access, and that no other " +
+			"SSH session, Toolbelt window, or second copy of this app is holding the unit's one SIS connection.",
 	}
 }
 
-// probeCommand collects everything the SMP sends for a fixed window instead of
+// sisProbe records what one channel type produced for one command. The
+// greeting is kept apart from the reply because the SMP sends its banner
+// unprompted: a banner with no reply means the command was ignored, while
+// silence in both means the channel itself never carried a SIS session.
+type sisProbe struct {
+	transport sisTransport
+	command   string
+	greeting  string
+	reply     string
+	err       error
+}
+
+// spoke reports whether the SMP produced anything at all on this channel.
+func (p sisProbe) spoke() bool {
+	return strings.TrimSpace(p.greeting+p.reply) != ""
+}
+
+// probeSIS collects everything the SMP sends for a fixed window instead of
 // waiting for a terminator, so a protocol mismatch is visible rather than
 // showing up as a bare timeout.
-func probeCommand(client *ssh.Client, command string, wait time.Duration) (string, error) {
-	session, err := client.NewSession()
+func probeSIS(client *ssh.Client, transport sisTransport, command string) sisProbe {
+	probe := sisProbe{transport: transport, command: command}
+	channel, err := openSISChannel(client, transport, command)
 	if err != nil {
-		return "", err
+		probe.err = err
+		return probe
 	}
-	defer session.Close()
+	defer channel.Close()
 
-	stdin, err := session.StdinPipe()
-	if err != nil {
-		return "", err
-	}
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		return "", err
-	}
-	if err := session.Shell(); err != nil {
-		return "", err
-	}
-	if _, err := io.WriteString(stdin, command); err != nil {
-		return "", err
+	output := collectOutput(channel.output)
+	// An exec channel carries the command at open time, so its greeting and
+	// its reply arrive mixed together and cannot be told apart.
+	if channel.carriesCommand {
+		output.wait(greetingWindow + probeWindow)
+		probe.reply = output.take()
+		return probe
 	}
 
-	var mu sync.Mutex
-	var buf bytes.Buffer
-	done := make(chan struct{})
+	output.wait(greetingWindow)
+	probe.greeting = output.take()
+	if err := channel.write(command); err != nil {
+		probe.err = err
+		return probe
+	}
+	output.wait(probeWindow)
+	probe.reply = output.take()
+	return probe
+}
+
+func matchesAnyLine(raw string, matches func(string) bool) bool {
+	for _, line := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\r' || r == '\n' }) {
+		if line = strings.TrimSpace(line); line != "" && matches(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstReply(probes []sisProbe) (sisProbe, bool) {
+	for _, probe := range probes {
+		if strings.TrimSpace(probe.reply) != "" {
+			return probe, true
+		}
+	}
+	return sisProbe{}, false
+}
+
+func firstGreeting(probes []sisProbe) (sisProbe, bool) {
+	for _, probe := range probes {
+		if strings.TrimSpace(probe.greeting) != "" {
+			return probe, true
+		}
+	}
+	return sisProbe{}, false
+}
+
+func probeTranscript(probes []sisProbe) string {
+	parts := make([]string, 0, len(probes))
+	for _, probe := range probes {
+		part := probe.transport.String() + ", sent " + printable(probe.command) + ": "
+		switch {
+		case probe.err != nil:
+			part += probe.err.Error()
+		case !probe.spoke():
+			part += "nothing"
+		default:
+			part += "received " + printable(probe.greeting+probe.reply)
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, " | ")
+}
+
+// outputCollector accumulates whatever arrives so a probe can report the raw
+// exchange, including output that turns up with no terminator.
+type outputCollector struct {
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	done chan struct{}
+}
+
+func collectOutput(r io.Reader) *outputCollector {
+	collector := &outputCollector{done: make(chan struct{})}
 	go func() {
-		defer close(done)
-		tmp := make([]byte, 1024)
+		defer close(collector.done)
+		chunk := make([]byte, 1024)
 		for {
-			n, err := stdout.Read(tmp)
+			n, err := r.Read(chunk)
 			if n > 0 {
-				mu.Lock()
-				buf.Write(tmp[:n])
-				mu.Unlock()
+				collector.mu.Lock()
+				collector.buf.Write(chunk[:n])
+				collector.mu.Unlock()
 			}
 			if err != nil {
 				return
 			}
 		}
 	}()
+	return collector
+}
 
+// wait stops early when the SMP closes the channel, which is as final as the
+// window running out.
+func (c *outputCollector) wait(window time.Duration) {
 	select {
-	case <-done:
-	case <-time.After(wait):
+	case <-c.done:
+	case <-time.After(window):
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	return buf.String(), nil
+}
+
+func (c *outputCollector) take() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	collected := c.buf.String()
+	c.buf.Reset()
+	return collected
 }
 
 // printable keeps the invisible bytes of an Extron exchange visible, since the
@@ -500,7 +652,20 @@ func (c *Client) sendCommand(
 		return "", err
 	}
 	defer client.Close()
-	return sendOnClient(client, command, matchesResponse)
+	conn := c.connection(client)
+	defer c.remember(conn)
+	return conn.sendCommand(command, matchesResponse)
+}
+
+func (c *Client) connection(client *ssh.Client) *connection {
+	return &connection{client: client, transport: c.transport, settled: c.settled}
+}
+
+// remember carries what the last login learned into the next one. The caller
+// holds the lock for the whole exchange, so no other operation can be reading
+// these at the same time.
+func (c *Client) remember(conn *connection) {
+	c.transport, c.settled = conn.transport, conn.settled
 }
 
 // actionClient keeps every command from one button press on a single SSH
@@ -514,22 +679,83 @@ func (c *Client) actionClient(cfg config.Config) (*Client, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	conn := c.connection(client)
 	action := &Client{send: func(
 		_ config.Config,
 		command string,
 		matchesResponse func(string) bool,
 	) (string, error) {
-		return sendOnClient(client, command, matchesResponse)
+		response, err := conn.sendCommand(command, matchesResponse)
+		c.remember(conn)
+		return response, err
 	}}
 	return action, func() { _ = client.Close() }, nil
 }
 
-func sendOnClient(
-	client *ssh.Client,
-	command string,
-	matchesResponse func(string) bool,
-) (string, error) {
-	response, err := runCommand(client, command, matchesResponse)
+// sisTransport is one way of asking the SMP to attach its SIS session to an
+// SSH channel. Firmware disagrees about this: a channel can open cleanly and
+// then stay silent because the unit wanted a terminal, or an interactive
+// shell, so the type that answers is discovered rather than assumed.
+type sisTransport int
+
+const (
+	shellTransport sisTransport = iota
+	terminalTransport
+	execTransport
+)
+
+var sisTransports = []sisTransport{shellTransport, terminalTransport, execTransport}
+
+func (t sisTransport) String() string {
+	switch t {
+	case terminalTransport:
+		return "shell with a terminal"
+	case execTransport:
+		return "exec channel"
+	default:
+		return "plain shell"
+	}
+}
+
+// connection is one SSH login plus the channel type this unit turned out to
+// answer on, so the search is paid for once per login instead of once per
+// command.
+type connection struct {
+	client    *ssh.Client
+	transport sisTransport
+	settled   bool
+}
+
+func (conn *connection) sendCommand(command string, matchesResponse func(string) bool) (string, error) {
+	if conn.settled {
+		response, err := runCommand(conn.client, conn.transport, command, matchesResponse)
+		if !mute(err) {
+			return sisResponse(response, err)
+		}
+		// The channel type that used to work has gone quiet, which happens
+		// after a firmware update or a reboot, so look for it again.
+		conn.settled = false
+	}
+
+	var attempts []error
+	for _, transport := range sisTransports {
+		response, err := runCommand(conn.client, transport, command, matchesResponse)
+		if mute(err) {
+			attempts = append(attempts, fmt.Errorf("%s: %w", transport, err))
+			continue
+		}
+		// Any other outcome, an SIS error included, proves this channel
+		// carries the SIS session, so the rest of the commands can use it.
+		conn.transport, conn.settled = transport, true
+		return sisResponse(response, err)
+	}
+	return "", fmt.Errorf(
+		"the SMP accepted the login but sent nothing back on any SSH channel type: %w",
+		errors.Join(attempts...),
+	)
+}
+
+func sisResponse(response string, err error) (string, error) {
 	if err != nil {
 		return "", err
 	}
@@ -537,6 +763,109 @@ func sendOnClient(
 		return "", fmt.Errorf("SMP returned SIS error E%s", match[1])
 	}
 	return response, nil
+}
+
+// sisChannel is an open SSH channel with the SMP's two output streams merged.
+// The unit puts its banner and some errors on stderr, which a stdout-only
+// reader cannot tell apart from silence.
+type sisChannel struct {
+	session *ssh.Session
+	output  io.ReadCloser
+	stdin   io.WriteCloser
+	// carriesCommand is set when the channel type delivered the command as it
+	// opened, leaving nothing to write.
+	carriesCommand bool
+}
+
+func (s *sisChannel) write(command string) error {
+	if s.carriesCommand {
+		return nil
+	}
+	_, err := io.WriteString(s.stdin, command)
+	return err
+}
+
+// Close releases the merged reader before the session, because the copies
+// feeding it would otherwise stay parked on a write that nobody is going to
+// read. The server runs for weeks between restarts and polls every few
+// seconds, so a leak here would accumulate.
+func (s *sisChannel) Close() {
+	_ = s.output.Close()
+	_ = s.session.Close()
+}
+
+// errChannelRejected marks a channel that never opened, which says the
+// transport is wrong rather than the command.
+var errChannelRejected = errors.New("SMP rejected this SSH channel")
+
+func openSISChannel(client *ssh.Client, transport sisTransport, command string) (*sisChannel, error) {
+	session, err := client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errChannelRejected, err)
+	}
+	channel, err := attachSIS(session, transport, command)
+	if err != nil {
+		_ = session.Close()
+		return nil, fmt.Errorf("%w: %v", errChannelRejected, err)
+	}
+	return channel, nil
+}
+
+func attachSIS(session *ssh.Session, transport sisTransport, command string) (*sisChannel, error) {
+	if transport == terminalTransport {
+		// Echo is switched off because a unit that hands out a terminal also
+		// mirrors the command back, which would otherwise be read as a reply.
+		modes := ssh.TerminalModes{ssh.ECHO: 0, ssh.TTY_OP_ISPEED: 9600, ssh.TTY_OP_OSPEED: 9600}
+		if err := session.RequestPty("vt100", 24, 80, modes); err != nil {
+			return nil, err
+		}
+	}
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := session.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	channel := &sisChannel{
+		session:        session,
+		output:         mergeOutput(stdout, stderr),
+		stdin:          stdin,
+		carriesCommand: transport == execTransport,
+	}
+	start := session.Shell
+	if channel.carriesCommand {
+		start = func() error { return session.Start(command) }
+	}
+	if err := start(); err != nil {
+		channel.Close()
+		return nil, err
+	}
+	return channel, nil
+}
+
+// mergeOutput reads both streams at once. io.MultiReader would block on the
+// first one until it ended, which on an interactive channel is never.
+func mergeOutput(streams ...io.Reader) io.ReadCloser {
+	reader, writer := io.Pipe()
+	var open sync.WaitGroup
+	open.Add(len(streams))
+	for _, stream := range streams {
+		go func() {
+			defer open.Done()
+			_, _ = io.Copy(writer, stream)
+		}()
+	}
+	go func() {
+		open.Wait()
+		_ = writer.Close()
+	}()
+	return reader
 }
 
 // smpAddress keeps IPv6 hosts usable: ParseHostPort stores them without
@@ -595,84 +924,164 @@ func dialClient(cfg config.Config) (*ssh.Client, error) {
 
 func runCommand(
 	client *ssh.Client,
+	transport sisTransport,
 	command string,
 	matchesResponse func(string) bool,
 ) (string, error) {
-	session, err := client.NewSession()
+	channel, err := openSISChannel(client, transport, command)
 	if err != nil {
 		return "", err
 	}
-	defer session.Close()
+	defer channel.Close()
 
-	stdin, err := session.StdinPipe()
-	if err != nil {
-		return "", err
+	// A channel that will not take the command never carried the SIS session,
+	// which is the same dead end as one that was refused outright.
+	if err := channel.write(command); err != nil {
+		return "", fmt.Errorf("%w: %v", errChannelRejected, err)
 	}
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		return "", err
-	}
-	if err := session.Shell(); err != nil {
-		return "", err
-	}
+	return readUntilResponse(channel.output, readTimeout, matchesResponse)
+}
 
-	if _, err := io.WriteString(stdin, command); err != nil {
-		return "", err
-	}
+// muteError means the channel produced no SIS text at all. That points at the
+// channel or at the unit's session limit rather than at the command, so it is
+// the one failure worth retrying on another channel type.
+type muteError struct {
+	transcript []string
+	closed     bool
+}
 
-	return readUntilResponse(stdout, readTimeout, matchesResponse)
+func (e *muteError) Error() string {
+	received := printable(strings.Join(e.transcript, "\n"))
+	if e.closed {
+		return fmt.Sprintf("SMP closed the connection before replying; received %q", received)
+	}
+	return fmt.Sprintf("timed out waiting for SMP response; received %q", received)
+}
+
+func mute(err error) bool {
+	if errors.Is(err, errChannelRejected) {
+		return true
+	}
+	var silence *muteError
+	return errors.As(err, &silence) && len(silence.transcript) == 0
 }
 
 // readUntilResponse ignores the copyright banner, timestamp, and any other
 // unsolicited lines until it sees either the expected reply or an SIS error.
+// Lines are cut on CR as well as LF, and a fragment that stops arriving is
+// taken as complete, because some firmware leaves the last reply of a session
+// without a terminator.
 func readUntilResponse(
 	r io.Reader,
 	timeout time.Duration,
 	matchesResponse func(string) bool,
 ) (string, error) {
 	type event struct {
-		line string
+		data []byte
 		err  error
-		done bool
 	}
-	events := make(chan event, 8)
+	events := make(chan event, 16)
+	// A chatty unit can outrun the buffer, so the reader is told to give up
+	// rather than sit on a send nobody will take once this call has returned.
+	quit := make(chan struct{})
+	defer close(quit)
 	go func() {
-		scanner := bufio.NewScanner(r)
-		for scanner.Scan() {
-			events <- event{line: strings.TrimSpace(scanner.Text())}
+		chunk := make([]byte, 1024)
+		send := func(current event) bool {
+			select {
+			case events <- current:
+				return true
+			case <-quit:
+				return false
+			}
 		}
-		events <- event{err: scanner.Err(), done: true}
+		for {
+			n, err := r.Read(chunk)
+			if n > 0 && !send(event{data: append([]byte(nil), chunk[:n]...)}) {
+				return
+			}
+			if err != nil {
+				send(event{err: err})
+				return
+			}
+		}
 	}()
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	isResponse := func(line string) bool {
+		return line != "" && (matchesResponse(line) || sisErrorRegex.MatchString(line))
+	}
+
 	var transcript []string
+	var pending []byte
+	var settled <-chan time.Time
 	for {
 		select {
 		case current := <-events:
-			if current.done {
-				if current.err != nil {
+			if current.err != nil {
+				fragment := strings.TrimSpace(string(pending))
+				if isResponse(fragment) {
+					return fragment, nil
+				}
+				if !errors.Is(current.err, io.EOF) {
 					return "", current.err
 				}
-				return "", fmt.Errorf(
-					"SMP closed the connection before replying; received %q",
-					printable(strings.Join(transcript, "\n")),
-				)
+				return "", &muteError{transcript: appendLine(transcript, fragment), closed: true}
 			}
-			if current.line == "" {
-				continue
+			pending = append(pending, current.data...)
+			var lines []string
+			lines, pending = splitSISLines(pending)
+			for _, line := range lines {
+				if line = strings.TrimSpace(line); line == "" {
+					continue
+				}
+				transcript = append(transcript, line)
+				if isResponse(line) {
+					return line, nil
+				}
 			}
-			transcript = append(transcript, current.line)
-			if matchesResponse(current.line) || sisErrorRegex.MatchString(current.line) {
-				return current.line, nil
+			// An unterminated fragment is only judged once it stops growing,
+			// since more of the line may still be on its way.
+			settled = nil
+			if strings.TrimSpace(string(pending)) != "" {
+				settled = time.After(partialLineWindow)
+			}
+		case <-settled:
+			settled = nil
+			if fragment := strings.TrimSpace(string(pending)); isResponse(fragment) {
+				return fragment, nil
 			}
 		case <-timer.C:
-			return "", fmt.Errorf(
-				"timed out waiting for SMP response; received %q",
-				printable(strings.Join(transcript, "\n")),
-			)
+			fragment := strings.TrimSpace(string(pending))
+			if isResponse(fragment) {
+				return fragment, nil
+			}
+			return "", &muteError{transcript: appendLine(transcript, fragment)}
 		}
 	}
+}
+
+// splitSISLines cuts on both terminators the SMP mixes and hands back the
+// trailing fragment that has none yet.
+func splitSISLines(data []byte) ([]string, []byte) {
+	var lines []string
+	start := 0
+	for index, current := range data {
+		if current != '\r' && current != '\n' {
+			continue
+		}
+		lines = append(lines, string(data[start:index]))
+		start = index + 1
+	}
+	return lines, data[start:]
+}
+
+func appendLine(lines []string, line string) []string {
+	if line == "" {
+		return lines
+	}
+	return append(lines, line)
 }
 
 func streamingPresetQueryCommand(streamIndex int) string {

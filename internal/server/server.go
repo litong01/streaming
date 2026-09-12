@@ -111,8 +111,9 @@ func (s *Server) startPoller(ctx context.Context) {
 			if interval <= 0 {
 				interval = 3 * time.Second
 			}
-			state := s.client.QueryState(cfg)
-			s.setState(state)
+			if state, polled := s.client.QueryState(cfg); polled {
+				s.setState(state)
+			}
 
 			select {
 			case <-ctx.Done():

@@ -29,14 +29,24 @@ CR=$(printf '\r')
 
 # The SMP needs a pause between commands or it answers with E22 (busy), and it
 # prints a two-line banner before every reply when verbose mode is off.
+#
+# Set SMP_TTY=1 if the unit signs in and then says nothing: some firmware only
+# starts its SIS session once a terminal has been requested. Standard error is
+# folded in because the banner arrives there on some firmware, where it would
+# otherwise be mistaken for silence.
 send() {
   local delay="${SMP_DELAY:-2}"
+  local tty_flag=(-T)
+  if [[ -n "${SMP_TTY:-}" ]]; then
+    tty_flag=(-tt)
+  fi
   {
     for command in "$@"; do
       printf '%s' "$command"
       sleep "$delay"
     done
-  } | ssh -T -o StrictHostKeyChecking=no -p "$SMP_PORT" "$SMP_USER@$SMP_HOST" | cat -v
+  } | ssh "${tty_flag[@]}" -o StrictHostKeyChecking=no -o LogLevel=ERROR \
+      -p "$SMP_PORT" "$SMP_USER@$SMP_HOST" 2>&1 | cat -v
 }
 
 status() {
