@@ -19,3 +19,6 @@ captures/
 .vscode/
 local.properties
 config.json
+
+# SMP configuration backups contain stream keys and stored credentials.
+*.cfg

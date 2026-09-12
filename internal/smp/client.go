@@ -1,6 +1,7 @@
 package smp
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -20,17 +21,20 @@ import (
 )
 
 const (
-	connectTimeout  = 10 * time.Second
-	readTimeout     = 5 * time.Second
-	webProbeTimeout = 2 * time.Second
-	probeWindow     = 3 * time.Second
+	connectTimeout        = 10 * time.Second
+	readTimeout           = 5 * time.Second
+	webProbeTimeout       = 2 * time.Second
+	probeWindow           = 3 * time.Second
+	archiveStreamIndex    = 1
+	confidenceStreamIndex = 3
 )
 
 var (
-	streamEnabledRegex  = regexp.MustCompile(`(?i)Strc\d+\*(\d+)`)
+	streamEnabledRegex  = regexp.MustCompile(`(?im)^(?:Strc\d+\*)?([01])\r?$`)
 	selectedPresetRegex = regexp.MustCompile(`,\s*(\d+)\*`)
 	singlePresetRegex   = regexp.MustCompile(`^(\d+)\*`)
-	sisErrorRegex       = regexp.MustCompile(`(?i)(?:^|[\r\n])E(10|12|13|14|17|18|22|24|26|28)(?:$|[\r\n])`)
+	sisErrorRegex       = regexp.MustCompile(`(?i)^E(10|12|13|14|17|18|22|24|26|28)$`)
+	presetResponseRegex = regexp.MustCompile(`^\d+\*`)
 )
 
 type ActiveStream string
@@ -51,7 +55,11 @@ type State struct {
 	QueriedAtEpochMs int64        `json:"queriedAtEpochMs"`
 }
 
-type Client struct{}
+type commandSender func(config.Config, string, func(string) bool) (string, error)
+
+type Client struct {
+	send commandSender
+}
 
 func New() *Client {
 	return &Client{}
@@ -61,7 +69,15 @@ func (c *Client) QueryState(cfg config.Config) State {
 	if !cfg.IsSmpConfigured() {
 		return notConfigured()
 	}
+	actionClient, closeAction, err := c.actionClient(cfg)
+	if err != nil {
+		return failed("SMP is not reachable", err)
+	}
+	defer closeAction()
+	return actionClient.queryState(cfg)
+}
 
+func (c *Client) queryState(cfg config.Config) State {
 	enabled, err := c.queryStreamEnabled(cfg)
 	if err != nil {
 		return failed("SMP is not reachable", err)
@@ -99,34 +115,60 @@ func (c *Client) QueryState(cfg config.Config) State {
 }
 
 func (c *Client) StartEnglish(cfg config.Config) State {
-	return c.startPreset(cfg, cfg.EnglishPreset, ActiveEnglish)
+	return c.start(cfg, cfg.EnglishPreset, ActiveEnglish)
 }
 
 func (c *Client) StartMandarin(cfg config.Config) State {
-	return c.startPreset(cfg, cfg.MandarinPreset, ActiveMandarin)
+	return c.start(cfg, cfg.MandarinPreset, ActiveMandarin)
 }
 
 func (c *Client) Stop(cfg config.Config) State {
 	if !cfg.IsSmpConfigured() {
 		return notConfigured()
 	}
-	if _, err := c.setStreamEnabled(cfg, false); err != nil {
+	actionClient, closeAction, err := c.actionClient(cfg)
+	if err != nil {
 		return failed("Stop failed", err)
 	}
-	return c.QueryState(cfg)
+	defer closeAction()
+	if err := actionClient.stopBoth(cfg); err != nil {
+		return failed("Stop failed", err)
+	}
+	return actionClient.queryState(cfg)
 }
 
-func (c *Client) startPreset(cfg config.Config, preset int, expected ActiveStream) State {
+func (c *Client) start(cfg config.Config, preset int, expected ActiveStream) State {
 	if !cfg.IsSmpConfigured() {
 		return notConfigured()
 	}
-	if _, err := c.recallStreamingPreset(cfg, preset); err != nil {
+	actionClient, closeAction, err := c.actionClient(cfg)
+	if err != nil {
 		return failed("Start failed", err)
 	}
-	if _, err := c.setStreamEnabled(cfg, true); err != nil {
+	defer closeAction()
+	return actionClient.startPreset(cfg, preset, expected)
+}
+
+func (c *Client) startPreset(cfg config.Config, preset int, expected ActiveStream) State {
+	if err := c.stopBoth(cfg); err != nil {
 		return failed("Start failed", err)
 	}
-	state := c.QueryState(cfg)
+	if _, err := c.recallStreamingPreset(cfg, archiveStreamIndex, preset); err != nil {
+		return failed("Start failed", fmt.Errorf("recall Archive preset %d: %w", preset, err))
+	}
+	if _, err := c.recallStreamingPreset(cfg, confidenceStreamIndex, cfg.ConfidencePreset); err != nil {
+		return failed("Start failed", fmt.Errorf("recall Confidence preset %d: %w", cfg.ConfidencePreset, err))
+	}
+	if _, err := c.setStreamEnabled(cfg, confidenceStreamIndex, true); err != nil {
+		return failed("Start failed", fmt.Errorf("start Confidence encoder: %w", err))
+	}
+	if _, err := c.setStreamEnabled(cfg, archiveStreamIndex, true); err != nil {
+		// Do not leave the preview encoder running after a partial start.
+		_, _ = c.setStreamEnabled(cfg, confidenceStreamIndex, false)
+		return failed("Start failed", fmt.Errorf("start Archive encoder: %w", err))
+	}
+
+	state := c.queryState(cfg)
 	if state.StreamEnabled {
 		state.ActiveStream = expected
 		if expected == ActiveEnglish {
@@ -138,20 +180,42 @@ func (c *Client) startPreset(cfg config.Config, preset int, expected ActiveStrea
 	return state
 }
 
-func (c *Client) recallStreamingPreset(cfg config.Config, preset int) (string, error) {
-	return c.sendCommand(cfg, streamingPresetRecallCommand(cfg.StreamIndex, preset))
+func (c *Client) stopBoth(cfg config.Config) error {
+	_, archiveErr := c.setStreamEnabled(cfg, archiveStreamIndex, false)
+	_, confidenceErr := c.setStreamEnabled(cfg, confidenceStreamIndex, false)
+	if archiveErr != nil {
+		archiveErr = fmt.Errorf("stop Archive encoder: %w", archiveErr)
+	}
+	if confidenceErr != nil {
+		confidenceErr = fmt.Errorf("stop Confidence encoder: %w", confidenceErr)
+	}
+	return errors.Join(archiveErr, confidenceErr)
 }
 
-func (c *Client) setStreamEnabled(cfg config.Config, enabled bool) (string, error) {
+func (c *Client) recallStreamingPreset(cfg config.Config, streamIndex, preset int) (string, error) {
+	expected := fmt.Sprintf("3Rpr%d*%d", streamIndex, preset)
+	return c.sendCommand(cfg, streamingPresetRecallCommand(streamIndex, preset), func(line string) bool {
+		return strings.EqualFold(line, expected)
+	})
+}
+
+func (c *Client) setStreamEnabled(cfg config.Config, streamIndex int, enabled bool) (string, error) {
 	value := 0
 	if enabled {
 		value = 1
 	}
-	return c.sendCommand(cfg, streamEnabledCommand(cfg.StreamIndex, value))
+	expected := fmt.Sprintf("Strc%d*%d", streamIndex, value)
+	return c.sendCommand(cfg, streamEnabledCommand(streamIndex, value), func(line string) bool {
+		if strings.EqualFold(line, expected) {
+			return true
+		}
+		match := streamEnabledRegex.FindStringSubmatch(line)
+		return len(match) == 2 && match[1] == strconv.Itoa(value)
+	})
 }
 
 func (c *Client) queryStreamEnabled(cfg config.Config) (bool, error) {
-	response, err := c.sendCommand(cfg, streamEnabledQuery(cfg.StreamIndex))
+	response, err := c.sendCommand(cfg, streamEnabledQuery(cfg.StreamIndex), matchesStreamStatus)
 	if err != nil {
 		return false, err
 	}
@@ -163,7 +227,9 @@ func (c *Client) queryStreamEnabled(cfg config.Config) (bool, error) {
 }
 
 func (c *Client) queryActiveStreamingPreset(cfg config.Config) (*int, error) {
-	response, err := c.sendCommand(cfg, streamingPresetQueryCommand(cfg.StreamIndex))
+	response, err := c.sendCommand(cfg, streamingPresetQueryCommand(cfg.StreamIndex), func(line string) bool {
+		return presetResponseRegex.MatchString(line)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -347,6 +413,10 @@ func streamEnabledQuery(streamIndex int) string {
 	return fmt.Sprintf("\x1b%dSTRC\r", streamIndex)
 }
 
+func matchesStreamStatus(line string) bool {
+	return streamEnabledRegex.MatchString(line)
+}
+
 func streamingPresetRecallCommand(streamIndex, preset int) string {
 	return fmt.Sprintf("3*%d*%d.", streamIndex, preset)
 }
@@ -417,13 +487,49 @@ func sshDiagnosis(addr string, err error) Diagnosis {
 	return result
 }
 
-func (c *Client) sendCommand(cfg config.Config, command string) (string, error) {
+func (c *Client) sendCommand(
+	cfg config.Config,
+	command string,
+	matchesResponse func(string) bool,
+) (string, error) {
+	if c.send != nil {
+		return c.send(cfg, command, matchesResponse)
+	}
 	client, err := dialClient(cfg)
 	if err != nil {
 		return "", err
 	}
 	defer client.Close()
-	response, err := runCommand(client, command)
+	return sendOnClient(client, command, matchesResponse)
+}
+
+// actionClient keeps every command from one button press on a single SSH
+// connection. The SMP 351 has a low connection limit and can report E22/E26
+// when several short-lived logins arrive back-to-back.
+func (c *Client) actionClient(cfg config.Config) (*Client, func(), error) {
+	if c.send != nil {
+		return c, func() {}, nil
+	}
+	client, err := dialClient(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	action := &Client{send: func(
+		_ config.Config,
+		command string,
+		matchesResponse func(string) bool,
+	) (string, error) {
+		return sendOnClient(client, command, matchesResponse)
+	}}
+	return action, func() { _ = client.Close() }, nil
+}
+
+func sendOnClient(
+	client *ssh.Client,
+	command string,
+	matchesResponse func(string) bool,
+) (string, error) {
+	response, err := runCommand(client, command, matchesResponse)
 	if err != nil {
 		return "", err
 	}
@@ -487,7 +593,11 @@ func dialClient(cfg config.Config) (*ssh.Client, error) {
 	return ssh.NewClient(sshConn, channels, requests), nil
 }
 
-func runCommand(client *ssh.Client, command string) (string, error) {
+func runCommand(
+	client *ssh.Client,
+	command string,
+	matchesResponse func(string) bool,
+) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return "", err
@@ -510,42 +620,58 @@ func runCommand(client *ssh.Client, command string) (string, error) {
 		return "", err
 	}
 
-	return readUntilTerminator(stdout, readTimeout)
+	return readUntilResponse(stdout, readTimeout, matchesResponse)
 }
 
-func readUntilTerminator(r io.Reader, timeout time.Duration) (string, error) {
-	type result struct {
-		data string
+// readUntilResponse ignores the copyright banner, timestamp, and any other
+// unsolicited lines until it sees either the expected reply or an SIS error.
+func readUntilResponse(
+	r io.Reader,
+	timeout time.Duration,
+	matchesResponse func(string) bool,
+) (string, error) {
+	type event struct {
+		line string
 		err  error
+		done bool
 	}
-	ch := make(chan result, 1)
+	events := make(chan event, 8)
 	go func() {
-		var buf bytes.Buffer
-		tmp := make([]byte, 1024)
-		for {
-			n, err := r.Read(tmp)
-			if n > 0 {
-				buf.Write(tmp[:n])
-				if bytes.Contains(buf.Bytes(), []byte("\r\n")) {
-					ch <- result{data: strings.TrimSpace(buf.String())}
-					return
-				}
-			}
-			if err != nil {
-				ch <- result{data: strings.TrimSpace(buf.String()), err: err}
-				return
-			}
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			events <- event{line: strings.TrimSpace(scanner.Text())}
 		}
+		events <- event{err: scanner.Err(), done: true}
 	}()
 
-	select {
-	case out := <-ch:
-		if out.data != "" {
-			return out.data, nil
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	var transcript []string
+	for {
+		select {
+		case current := <-events:
+			if current.done {
+				if current.err != nil {
+					return "", current.err
+				}
+				return "", fmt.Errorf(
+					"SMP closed the connection before replying; received %q",
+					printable(strings.Join(transcript, "\n")),
+				)
+			}
+			if current.line == "" {
+				continue
+			}
+			transcript = append(transcript, current.line)
+			if matchesResponse(current.line) || sisErrorRegex.MatchString(current.line) {
+				return current.line, nil
+			}
+		case <-timer.C:
+			return "", fmt.Errorf(
+				"timed out waiting for SMP response; received %q",
+				printable(strings.Join(transcript, "\n")),
+			)
 		}
-		return "", out.err
-	case <-time.After(timeout):
-		return "", fmt.Errorf("timed out waiting for SMP response")
 	}
 }
 
@@ -561,17 +687,24 @@ func streamingPresetQueryCommand(streamIndex int) string {
 }
 
 func parseSelectedStreamingPreset(response string) *int {
-	if match := selectedPresetRegex.FindStringSubmatch(response); len(match) == 2 {
-		if value, err := strconv.Atoi(match[1]); err == nil {
-			return &value
-		}
+	line := strings.TrimSpace(response)
+	if match := selectedPresetRegex.FindStringSubmatch(line); len(match) == 2 {
+		return presetNumber(match[1])
 	}
-	if match := singlePresetRegex.FindStringSubmatch(strings.TrimSpace(response)); len(match) == 2 {
-		if value, err := strconv.Atoi(match[1]); err == nil {
-			return &value
-		}
+	if match := singlePresetRegex.FindStringSubmatch(line); len(match) == 2 {
+		return presetNumber(match[1])
 	}
 	return nil
+}
+
+// presetNumber treats 0 as "none". The SMP 351 reports that as
+// "0*modified, not saved" when the live stream does not match a saved preset.
+func presetNumber(value string) *int {
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return nil
+	}
+	return &parsed
 }
 
 func notConfigured() State {

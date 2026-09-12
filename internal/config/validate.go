@@ -85,11 +85,14 @@ func (c Config) Validate() error {
 		return fmt.Errorf("HTTP port must be between %d and %d", minUserPort, maxPort)
 	}
 	if c.EnglishPreset < minPreset || c.EnglishPreset > maxPreset ||
-		c.MandarinPreset < minPreset || c.MandarinPreset > maxPreset {
+		c.MandarinPreset < minPreset || c.MandarinPreset > maxPreset ||
+		c.ConfidencePreset < minPreset || c.ConfidencePreset > maxPreset {
 		return fmt.Errorf("preset numbers must be between %d and %d", minPreset, maxPreset)
 	}
-	if c.EnglishPreset == c.MandarinPreset {
-		return fmt.Errorf("English and Mandarin presets must be different")
+	if c.EnglishPreset == c.MandarinPreset ||
+		c.EnglishPreset == c.ConfidencePreset ||
+		c.MandarinPreset == c.ConfidencePreset {
+		return fmt.Errorf("English, Mandarin, and Confidence presets must be different")
 	}
 	if c.Go2rtcPort != 0 && (c.Go2rtcPort < minUserPort || c.Go2rtcPort > maxPort) {
 		return fmt.Errorf("preview port must be between %d and %d", minUserPort, maxPort)

@@ -20,9 +20,10 @@ const (
 	DefaultStreamIndex         = 1
 	DefaultEnglishPreset       = 2
 	DefaultMandarinPreset      = 1
+	DefaultConfidencePreset    = 3
 	DefaultPollIntervalSeconds = 3
 	DefaultGo2rtcPort          = 1984
-	CurrentSchemaVersion       = 2
+	CurrentSchemaVersion       = 3
 )
 
 var encryptedFileMagic = []byte("STREAMING-CONFIG-V1\x00")
@@ -37,6 +38,7 @@ type Config struct {
 	StreamIndex         int    `json:"streamIndex"`
 	EnglishPreset       int    `json:"englishPreset"`
 	MandarinPreset      int    `json:"mandarinPreset"`
+	ConfidencePreset    int    `json:"confidencePreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
 	PreviewURL          string `json:"previewUrl"`
 	Go2rtcPort          int    `json:"go2rtcPort"`
@@ -50,6 +52,7 @@ type PublicConfig struct {
 	HTTPPort            int    `json:"httpPort"`
 	EnglishPreset       int    `json:"englishPreset"`
 	MandarinPreset      int    `json:"mandarinPreset"`
+	ConfidencePreset    int    `json:"confidencePreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
 	PreviewURL          string `json:"previewUrl"`
 	Go2rtcPort          int    `json:"go2rtcPort"`
@@ -78,6 +81,7 @@ func Default() Config {
 		StreamIndex:         DefaultStreamIndex,
 		EnglishPreset:       DefaultEnglishPreset,
 		MandarinPreset:      DefaultMandarinPreset,
+		ConfidencePreset:    DefaultConfidencePreset,
 		PollIntervalSeconds: DefaultPollIntervalSeconds,
 		Go2rtcPort:          DefaultGo2rtcPort,
 	}
@@ -174,6 +178,7 @@ func (s *Store) Public() PublicConfig {
 		HTTPPort:            cfg.HTTPPort,
 		EnglishPreset:       cfg.EnglishPreset,
 		MandarinPreset:      cfg.MandarinPreset,
+		ConfidencePreset:    cfg.ConfidencePreset,
 		PollIntervalSeconds: cfg.PollIntervalSeconds,
 		PreviewURL:          cfg.PreviewURL,
 		Go2rtcPort:          cfg.Go2rtcPort,
@@ -293,6 +298,9 @@ func withDefaults(cfg Config) Config {
 	if cfg.MandarinPreset == 0 {
 		cfg.MandarinPreset = DefaultMandarinPreset
 	}
+	if cfg.ConfidencePreset == 0 {
+		cfg.ConfidencePreset = DefaultConfidencePreset
+	}
 	if cfg.PollIntervalSeconds == 0 {
 		cfg.PollIntervalSeconds = DefaultPollIntervalSeconds
 	}
@@ -304,13 +312,11 @@ func withDefaults(cfg Config) Config {
 }
 
 func migratePresetMapping(cfg *Config) bool {
-	if cfg.SchemaVersion >= CurrentSchemaVersion {
-		return false
-	}
-	if cfg.EnglishPreset == 1 && cfg.MandarinPreset == 2 {
+	originalVersion := cfg.SchemaVersion
+	if originalVersion < 2 && cfg.EnglishPreset == 1 && cfg.MandarinPreset == 2 {
 		cfg.EnglishPreset = DefaultEnglishPreset
 		cfg.MandarinPreset = DefaultMandarinPreset
 	}
 	cfg.SchemaVersion = CurrentSchemaVersion
-	return true
+	return originalVersion < CurrentSchemaVersion
 }

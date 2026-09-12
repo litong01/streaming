@@ -19,8 +19,9 @@ ARM64 executable supervised by the Android app.
 - The server starts during boot, before anyone signs in, and again after an app
   update. Every fifteen minutes a background check restarts it if it stopped
   answering.
-- Preset 1 is Mandarin and preset 2 is English by default. Both presets must
-  already be configured through the native SMP web interface.
+- Preset 1 is Mandarin, preset 2 is English, and preset 3 is the Confidence
+  RTSP pull output by default. All three must already be configured through
+  the native SMP web interface.
 
 The Android wrapper is Kotlin, but SMP commands, status polling, configuration
 APIs, and web serving are implemented only in Go. No Java or Android tooling is
@@ -30,7 +31,7 @@ required on your Mac because GitHub Actions performs the Android build.
 
 The Go server embeds the two pages from `web/`. The control page follows the
 myconsole launcher look used by Fully Kiosk Browser: clock, date, a small live
-preview above the round tiles, and English / Mandarin / Stop. The preview is
+preview above the round tiles, and Start English / Start Mandarin / Stop. The preview is
 shown only while a stream is enabled. go2rtc converts the SMP secondary output
 into a browser-playable stream so the picture matches what is pushed to YouTube.
 
@@ -130,11 +131,12 @@ unlocked, which is the moment the APK is installed.
 
 ## SMP commands
 
-For stream 1 (Archive Ch A) and preset `P`:
+For stream 1 (Archive Ch A), stream 3 (Confidence), and preset `P`:
 
-- Recall streaming preset: `3*1*P.`
-- Enable stream: `E1*1STRC}`
-- Disable stream: `E1*0STRC}`
+- Recall preset onto Archive: `3*1*P.`
+- Recall preset onto Confidence: `3*3*P.`
+- Enable Archive / Confidence: `E1*1STRC}` / `E3*1STRC}`
+- Disable Archive / Confidence: `E1*0STRC}` / `E3*0STRC}`
 - Query stream enabled: `E1STRC}`
 - Query selected streaming preset: `46I`
 
@@ -142,6 +144,8 @@ In Extron's command-table notation, `E` is the escape byte (`0x1b`), `}` is
 a carriage return (`0x0d`), and `]` in a response is CR/LF. They are not
 literal characters. The Go client sends and reads those control bytes.
 
-The app always controls Archive Channel A. That is the encoder used for the
-YouTube live push. The on-screen player uses the SMP confidence/secondary
-output through go2rtc, so the tablet shows the same encoded picture.
+Starting a language stops both encoders, recalls that language's RTMP preset
+onto Archive, recalls the Confidence RTSP preset onto Confidence, then enables
+Confidence followed by Archive. Stop disables both encoders. All commands from
+one button press share one SSH login to avoid exhausting the SMP's connection
+limit. The on-screen player uses Confidence through go2rtc.
