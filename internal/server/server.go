@@ -13,15 +13,13 @@ import (
 	"time"
 
 	"streaming/internal/config"
-	"streaming/internal/preview"
 	"streaming/internal/smp"
 )
 
 type Server struct {
-	store   *config.Store
-	client  *smp.Client
-	preview *preview.Manager
-	pages   Pages
+	store  *config.Store
+	client *smp.Client
+	pages  Pages
 
 	mu     sync.Mutex
 	state  smp.State
@@ -36,10 +34,9 @@ type Pages struct {
 
 func New(store *config.Store, client *smp.Client, pages Pages) *Server {
 	return &Server{
-		store:   store,
-		client:  client,
-		preview: preview.New(),
-		pages:   pages,
+		store:  store,
+		client: client,
+		pages:  pages,
 		state: smp.State{
 			ActiveStream:  smp.ActiveNone,
 			StatusMessage: "Idle",
@@ -65,7 +62,6 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		s.mu.Unlock()
 
 		s.startPoller(runCtx)
-		s.preview.Sync(cfg)
 		log.Printf("listening on http://0.0.0.0:%d/", cfg.HTTPPort)
 
 		errCh := make(chan error, 1)
@@ -78,7 +74,6 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer shutdownCancel()
 			_ = httpServer.Shutdown(shutdownCtx)
-			s.preview.Stop()
 			return ctx.Err()
 		case <-runCtx.Done():
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -131,10 +126,80 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfigAPI)
 	mux.HandleFunc("/api/config/test", s.handleConfigTest)
+	mux.HandleFunc("/api/preview", s.handlePreview)
 	mux.HandleFunc("/api/stream/english", s.handleEnglish)
 	mux.HandleFunc("/api/stream/mandarin", s.handleMandarin)
 	mux.HandleFunc("/api/stream/stop", s.handleStop)
 	return mux
+}
+
+// previewClient deliberately has no overall timeout: the SMP's preview is an
+// endless fragmented MP4 whose body is relayed for as long as the browser
+// keeps watching.
+var previewClient = &http.Client{
+	Transport: &http.Transport{
+		ResponseHeaderTimeout: 5 * time.Second,
+	},
+}
+
+// handlePreview relays the SMP's own live preview to the browser. The unit
+// serves it as a fragmented MP4 over HTTP and keeps producing it whether or
+// not an encoder is streaming, so the picture does not depend on the
+// Confidence preset or on the unit's RTSP delivery, which sends no media.
+func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg := s.store.Get()
+	if !cfg.IsSmpConfigured() {
+		http.Error(w, "SMP is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// The cache-busting parameter is what the SMP's own preview page sends.
+	target := fmt.Sprintf("http://%s/mp4stream?d=%d", cfg.SmpHost, time.Now().UnixMilli())
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "preview unavailable", http.StatusBadGateway)
+		return
+	}
+	req.SetBasicAuth(cfg.SmpUsername, cfg.SmpPassword)
+
+	resp, err := previewClient.Do(req)
+	if err != nil {
+		http.Error(w, "preview unavailable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "preview unavailable", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Cache-Control", "no-store")
+	copyStreaming(w, resp.Body)
+}
+
+// copyStreaming forwards the body a fragment at a time and flushes each one,
+// so the picture starts as soon as the SMP sends it rather than when a buffer
+// happens to fill.
+func copyStreaming(w http.ResponseWriter, body io.Reader) {
+	controller := http.NewResponseController(w)
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return
+			}
+			_ = controller.Flush()
+		}
+		if readErr != nil {
+			return
+		}
+	}
 }
 
 func (s *Server) handleControl(w http.ResponseWriter, r *http.Request) {
@@ -205,8 +270,6 @@ type configPayload struct {
 	EnglishPreset    int    `json:"englishPreset"`
 	MandarinPreset   int    `json:"mandarinPreset"`
 	ConfidencePreset int    `json:"confidencePreset"`
-	PreviewURL       string `json:"previewUrl"`
-	Go2rtcPort       int    `json:"go2rtcPort"`
 }
 
 // handleConfigTest probes the SMP with the values currently in the form so a
@@ -281,11 +344,6 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	if next.ConfidencePreset == 0 {
 		next.ConfidencePreset = config.DefaultConfidencePreset
 	}
-	next.PreviewURL = strings.TrimSpace(payload.PreviewURL)
-	next.Go2rtcPort = payload.Go2rtcPort
-	if next.Go2rtcPort == 0 {
-		next.Go2rtcPort = config.DefaultGo2rtcPort
-	}
 	if err := next.Validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -297,11 +355,8 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "httpPort": next.HTTPPort})
-	previewChanged := next.PreviewURL != current.PreviewURL || next.Go2rtcPort != current.Go2rtcPort
 	if next.HTTPPort != current.HTTPPort {
 		go s.restart()
-	} else if previewChanged {
-		go s.preview.Sync(next)
 	}
 }
 
@@ -319,20 +374,13 @@ func (s *Server) setState(state smp.State) {
 
 type statusPayload struct {
 	smp.State
-	PreviewReady      bool `json:"previewReady"`
-	PreviewConfigured bool `json:"previewConfigured"`
-	Go2rtcPort        int  `json:"go2rtcPort"`
-	Go2rtcAvailable   bool `json:"go2rtcAvailable"`
+	PreviewAvailable bool `json:"previewAvailable"`
 }
 
 func (s *Server) statusPayload(state smp.State) statusPayload {
-	cfg := s.store.Get()
 	return statusPayload{
-		State:             state,
-		PreviewReady:      s.preview.Ready(),
-		PreviewConfigured: strings.TrimSpace(cfg.PreviewURL) != "",
-		Go2rtcPort:        cfg.Go2rtcPort,
-		Go2rtcAvailable:   s.preview.Available(),
+		State:            state,
+		PreviewAvailable: s.store.Get().IsSmpConfigured(),
 	}
 }
 

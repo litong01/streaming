@@ -95,11 +95,12 @@
       display: none;
     }
 
-    .preview iframe {
+    .preview video {
       width: 100%;
       height: 100%;
-      border: 0;
+      display: block;
       background: #000;
+      object-fit: cover;
     }
 
     #grid {
@@ -282,7 +283,7 @@
 
   <main id="stage">
     <div id="preview" class="preview" hidden>
-      <iframe id="previewFrame" title="Live stream preview" allow="autoplay"></iframe>
+      <video id="previewVideo" title="Live camera preview" autoplay muted playsinline></video>
     </div>
 
     <div id="grid" role="group" aria-label="Streaming controls">
@@ -338,9 +339,9 @@
     const mandarinButton = document.getElementById("mandarin");
     const stopButton = document.getElementById("stop");
     const preview = document.getElementById("preview");
-    const previewFrame = document.getElementById("previewFrame");
+    const previewVideo = document.getElementById("previewVideo");
     let busy = false;
-    let previewSrc = "";
+    let previewPlaying = false;
 
     function pad(value) {
       return value < 10 ? "0" + value : String(value);
@@ -369,28 +370,53 @@
       updatePreview(data);
     }
 
-    function previewAddress(data) {
-      const port = Number(data.go2rtcPort) || 1984;
-      return "http://" + location.hostname + ":" + port + "/stream.html?src=smp";
-    }
-
+    // The SMP serves its own preview whether or not an encoder is streaming,
+    // so the picture is shown whenever the unit is reachable rather than only
+    // while a language is live.
     function updatePreview(data) {
-      const show = Boolean(data.streamEnabled && data.previewConfigured && data.go2rtcAvailable);
-      if (!show) {
-        if (previewSrc) {
-          previewFrame.src = "about:blank";
-          previewSrc = "";
-        }
+      if (!data.previewAvailable) {
+        stopPreview();
         preview.hidden = true;
         return;
       }
-      const next = previewAddress(data);
-      if (previewSrc !== next) {
-        previewFrame.src = next;
-        previewSrc = next;
-      }
       preview.hidden = false;
+      if (!previewPlaying) {
+        startPreview();
+      }
     }
+
+    function startPreview() {
+      previewPlaying = true;
+      previewVideo.src = "/api/preview?t=" + Date.now();
+      const started = previewVideo.play();
+      if (started) {
+        started.catch(function () {});
+      }
+    }
+
+    function stopPreview() {
+      if (!previewPlaying) {
+        return;
+      }
+      previewPlaying = false;
+      previewVideo.removeAttribute("src");
+      previewVideo.load();
+    }
+
+    function restartPreview() {
+      if (!previewPlaying) {
+        return;
+      }
+      stopPreview();
+      setTimeout(function () {
+        if (!preview.hidden) {
+          startPreview();
+        }
+      }, 3000);
+    }
+
+    previewVideo.addEventListener("error", restartPreview);
+    previewVideo.addEventListener("ended", restartPreview);
 
     function showOffline(message, error) {
       statusValue.textContent = message;

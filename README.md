@@ -8,12 +8,10 @@ ARM64 executable supervised by the Android app.
 
 - Tapping the Streaming app icon starts the foreground web server and opens its
   configuration page inside the app.
-- The APK contains the Go control server and a go2rtc binary. A small Kotlin
-  foreground service starts the Go server, which in turn starts go2rtc for the
-  live preview.
+- The APK contains the Go control server. A small Kotlin foreground service
+  starts it.
 - The configuration page collects the SMP address, SSH credentials, server
-  port, preset numbers, and the SMP confidence/secondary stream URL used for
-  the on-screen preview.
+  port, and preset numbers.
 - Credentials never leave the Android device.
 - Fully Kiosk Browser uses `http://127.0.0.1:8080/` for daily operation.
 - The server starts during boot, before anyone signs in, and again after an app
@@ -31,9 +29,15 @@ required on your Mac because GitHub Actions performs the Android build.
 
 The Go server embeds the two pages from `web/`. The control page follows the
 myconsole launcher look used by Fully Kiosk Browser: clock, date, a small live
-preview above the round tiles, and Start English / Start Mandarin / Stop. The preview is
-shown only while a stream is enabled. go2rtc converts the SMP secondary output
-into a browser-playable stream so the picture matches what is pushed to YouTube.
+preview above the round tiles, and Start English / Start Mandarin / Stop.
+
+The preview is the SMP's own `/mp4stream` endpoint, a fragmented MP4 the unit
+serves over HTTP and plays in its own web interface. `/api/preview` relays it
+with the stored credentials so the browser needs none. The unit produces it
+whether or not an encoder is streaming, so the camera is visible before anyone
+taps a language. This replaced an RTSP pull through go2rtc, which this unit
+accepts and then never sends media on: it reports 0 packets sent for every
+session, over both TCP and UDP.
 
 ## Build and download the APK
 
@@ -110,17 +114,12 @@ Its configuration is stored at
 `~/.config/streaming/config.json` with file mode `0600`. Override the path with
 the `STREAMING_CONFIG` environment variable.
 
-On a computer, install [go2rtc](https://github.com/AlexxIT/go2rtc/releases) on
-your `PATH`, place the binary next to `./streaming`, or set `STREAMING_GO2RTC`
-to its path. The control server writes `go2rtc.yaml` and starts that process on
-port `1984` (configurable).
-
 ## Android build details
 
 The Gradle build invokes `scripts/build-android-go.sh`, which uses the Android
-NDK to compile ARM64 PIE executables for the control server and go2rtc. They
-are packaged as `lib/arm64-v8a/libstreaming.so` and `lib/arm64-v8a/libgo2rtc.so`
-so Android extracts them into the app's executable native-library directory.
+NDK to compile an ARM64 PIE executable for the control server. It is packaged
+as `lib/arm64-v8a/libstreaming.so` so Android extracts it into the app's
+executable native-library directory.
 
 On upgrade from the earlier Kotlin-server APK, existing encrypted SMP settings
 are imported once. The Go configuration file is encrypted with an AES-GCM key,
@@ -165,8 +164,7 @@ encoder off is itself enough to cause that, so anything uncertain falls through
 to a full recall.
 
 Stop disables both encoders. All commands from one button press share one SSH
-login to avoid exhausting the SMP's connection limit. The on-screen player uses
-Confidence through go2rtc.
+login to avoid exhausting the SMP's connection limit.
 
 ## When the SMP signs in but answers nothing
 

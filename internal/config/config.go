@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -22,7 +21,6 @@ const (
 	DefaultMandarinPreset      = 1
 	DefaultConfidencePreset    = 3
 	DefaultPollIntervalSeconds = 3
-	DefaultGo2rtcPort          = 1984
 	CurrentSchemaVersion       = 3
 )
 
@@ -40,8 +38,6 @@ type Config struct {
 	MandarinPreset      int    `json:"mandarinPreset"`
 	ConfidencePreset    int    `json:"confidencePreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
-	PreviewURL          string `json:"previewUrl"`
-	Go2rtcPort          int    `json:"go2rtcPort"`
 }
 
 type PublicConfig struct {
@@ -54,8 +50,6 @@ type PublicConfig struct {
 	MandarinPreset      int    `json:"mandarinPreset"`
 	ConfidencePreset    int    `json:"confidencePreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
-	PreviewURL          string `json:"previewUrl"`
-	Go2rtcPort          int    `json:"go2rtcPort"`
 	IsSmpConfigured     bool   `json:"isSmpConfigured"`
 }
 
@@ -83,7 +77,6 @@ func Default() Config {
 		MandarinPreset:      DefaultMandarinPreset,
 		ConfidencePreset:    DefaultConfidencePreset,
 		PollIntervalSeconds: DefaultPollIntervalSeconds,
-		Go2rtcPort:          DefaultGo2rtcPort,
 	}
 }
 
@@ -180,8 +173,6 @@ func (s *Store) Public() PublicConfig {
 		MandarinPreset:      cfg.MandarinPreset,
 		ConfidencePreset:    cfg.ConfidencePreset,
 		PollIntervalSeconds: cfg.PollIntervalSeconds,
-		PreviewURL:          cfg.PreviewURL,
-		Go2rtcPort:          cfg.Go2rtcPort,
 		IsSmpConfigured:     cfg.IsSmpConfigured(),
 	}
 }
@@ -304,10 +295,6 @@ func withDefaults(cfg Config) Config {
 	if cfg.PollIntervalSeconds == 0 {
 		cfg.PollIntervalSeconds = DefaultPollIntervalSeconds
 	}
-	if cfg.Go2rtcPort == 0 {
-		cfg.Go2rtcPort = DefaultGo2rtcPort
-	}
-	cfg.PreviewURL = strings.TrimSpace(cfg.PreviewURL)
 	return cfg
 }
 

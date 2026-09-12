@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"net"
-	"net/url"
 	"strings"
 	"unicode"
 )
@@ -93,29 +92,6 @@ func (c Config) Validate() error {
 		c.EnglishPreset == c.ConfidencePreset ||
 		c.MandarinPreset == c.ConfidencePreset {
 		return fmt.Errorf("English, Mandarin, and Confidence presets must be different")
-	}
-	if c.Go2rtcPort != 0 && (c.Go2rtcPort < minUserPort || c.Go2rtcPort > maxPort) {
-		return fmt.Errorf("preview port must be between %d and %d", minUserPort, maxPort)
-	}
-	if c.Go2rtcPort != 0 && c.Go2rtcPort == c.HTTPPort {
-		return fmt.Errorf("preview port must be different from the HTTP port")
-	}
-	return ValidatePreviewURL(c.PreviewURL)
-}
-
-func ValidatePreviewURL(value string) error {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("preview URL must be a valid RTSP or HTTP stream URL")
-	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "rtsp", "rtsps", "http", "https", "rtmp", "rtmps":
-	default:
-		return fmt.Errorf("preview URL must use rtsp, http, or rtmp")
 	}
 	return nil
 }

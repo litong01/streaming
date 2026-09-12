@@ -55,16 +55,3 @@ android_build() {
 
 android_build "$ROOT_DIR" "$OUTPUT_DIR/libstreaming.so"
 echo "Built Android Go server: $OUTPUT_DIR/libstreaming.so"
-
-GO2RTC_VERSION="${GO2RTC_VERSION:-v1.9.14}"
-GO2RTC_SRC="$ROOT_DIR/build/go2rtc-${GO2RTC_VERSION}"
-if [[ ! -d "$GO2RTC_SRC/.git" ]]; then
-  rm -rf "$GO2RTC_SRC"
-  git clone --depth 1 --branch "$GO2RTC_VERSION" https://github.com/AlexxIT/go2rtc.git "$GO2RTC_SRC"
-fi
-# ALSA/V4L2 pull Linux C sources that do not cross-compile for Android.
-if grep -q 'github.com/AlexxIT/go2rtc/internal/alsa' "$GO2RTC_SRC/main.go"; then
-  git -C "$GO2RTC_SRC" apply "$ROOT_DIR/scripts/go2rtc-android.patch"
-fi
-android_build "$GO2RTC_SRC" "$OUTPUT_DIR/libgo2rtc.so" "-checklinkname=0"
-echo "Built Android go2rtc: $OUTPUT_DIR/libgo2rtc.so"
