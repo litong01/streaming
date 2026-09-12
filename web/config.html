@@ -41,7 +41,7 @@
       padding: 0 16px;
       font-size: 16px;
     }
-    .actions { display: flex; gap: 12px; margin-top: 8px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
     button, .link-button {
       min-height: 52px;
       border-radius: 999px;
@@ -61,6 +61,23 @@
       border: 1px solid var(--ring);
     }
     #saveMessage { min-height: 20px; color: var(--accent); }
+    button.secondary {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--ring);
+    }
+    button:disabled { opacity: 0.5; cursor: progress; }
+    #testResult { display: grid; gap: 6px; font-size: 14px; line-height: 1.45; }
+    #testResult .stage { font-weight: 500; }
+    #testResult.ok { color: #a8dab5; }
+    #testResult.bad { color: var(--warn, #f28b82); }
+    #testResult .hint { color: var(--muted); }
+    #testResult .detail {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+    }
     .section-title {
       margin-top: 12px;
       font-size: 13px;
@@ -119,8 +136,10 @@
       </label>
 
       <div id="saveMessage"></div>
+      <div id="testResult"></div>
       <div class="actions">
         <a class="link-button" href="/">Back</a>
+        <button id="testButton" class="secondary" type="button">Test connection</button>
         <button type="submit">Save</button>
       </div>
     </form>
@@ -135,7 +154,6 @@
       host = (host || "").trim();
       port = Number(port) || DEFAULT_SSH_PORT;
       if (!host) return "";
-      if (port === DEFAULT_SSH_PORT) return host;
       if (host.includes(":") && !host.startsWith("[")) return "[" + host + "]:" + port;
       return host + ":" + port;
     }
@@ -215,6 +233,67 @@
         }
       } else {
         saveMessage.textContent = data.error || "Save failed";
+      }
+    });
+
+    const testButton = document.getElementById("testButton");
+    const testResult = document.getElementById("testResult");
+
+    const STAGE_LABELS = {
+      address: "Address",
+      network: "Network",
+      handshake: "SSH",
+      auth: "Credentials",
+      command: "SIS command",
+      ok: "Connected"
+    };
+
+    function renderResult(className, lines) {
+      testResult.className = className;
+      testResult.replaceChildren();
+      for (const [style, text] of lines) {
+        if (!text) continue;
+        const line = document.createElement("div");
+        line.className = style;
+        line.textContent = text;
+        testResult.append(line);
+      }
+    }
+
+    testButton.addEventListener("click", async () => {
+      const address = parseAddress(document.getElementById("smpAddress").value);
+      if (address.error) {
+        renderResult("bad", [["stage", address.error]]);
+        return;
+      }
+      testButton.disabled = true;
+      renderResult("", [["hint", "Testing connection, up to about fifteen seconds..."]]);
+      try {
+        const response = await fetch("/api/config/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            smpHost: address.host,
+            smpSshPort: address.port,
+            smpUsername: document.getElementById("smpUsername").value.trim(),
+            smpPassword: document.getElementById("smpPassword").value
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          renderResult("bad", [["stage", data.error || "Test failed"]]);
+          return;
+        }
+        const label = STAGE_LABELS[data.stage] || "Result";
+        renderResult(data.ok ? "ok" : "bad", [
+          ["stage", label + ": " + (data.summary || "")],
+          ["hint", data.hint],
+          ["detail", data.detail]
+        ]);
+      } catch (error) {
+        renderResult("bad", [["stage", String(error)]]);
+      } finally {
+        testButton.disabled = false;
       }
     });
 

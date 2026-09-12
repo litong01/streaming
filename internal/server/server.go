@@ -129,6 +129,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/config", s.handleConfigPage)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfigAPI)
+	mux.HandleFunc("/api/config/test", s.handleConfigTest)
 	mux.HandleFunc("/api/stream/english", s.handleEnglish)
 	mux.HandleFunc("/api/stream/mandarin", s.handleMandarin)
 	mux.HandleFunc("/api/stream/stop", s.handleStop)
@@ -210,15 +211,52 @@ type configPayload struct {
 	Go2rtcPort     int    `json:"go2rtcPort"`
 }
 
-func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+// handleConfigTest probes the SMP with the values currently in the form so a
+// connection can be checked before it is saved. It stores nothing.
+func (s *Server) handleConfigTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	payload, err := readConfigPayload(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	cfg := s.store.Get()
+	host, sshPort, err := config.ParseHostPort(payload.SmpHost, payload.SmpSSHPort)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	cfg.SmpHost = host
+	cfg.SmpSSHPort = sshPort
+	if username := strings.TrimSpace(payload.SmpUsername); username != "" {
+		cfg.SmpUsername = username
+	}
+	// An empty box means "keep the saved password", matching the save path.
+	if payload.SmpPassword != "" {
+		cfg.SmpPassword = payload.SmpPassword
+	}
+	writeJSON(w, http.StatusOK, s.client.Diagnose(cfg))
+}
+
+func readConfigPayload(r *http.Request) (configPayload, error) {
 	var payload configPayload
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return payload, fmt.Errorf("invalid body")
+	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return payload, fmt.Errorf("invalid JSON")
+	}
+	return payload, nil
+}
+
+func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
+	payload, err := readConfigPayload(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	current := s.store.Get()
