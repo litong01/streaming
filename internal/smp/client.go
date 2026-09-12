@@ -30,6 +30,7 @@ var (
 	streamEnabledRegex  = regexp.MustCompile(`(?i)Strc\d+\*(\d+)`)
 	selectedPresetRegex = regexp.MustCompile(`,\s*(\d+)\*`)
 	singlePresetRegex   = regexp.MustCompile(`^(\d+)\*`)
+	sisErrorRegex       = regexp.MustCompile(`(?i)(?:^|[\r\n])E(10|12|13|14|17|18|22|24|26|28)(?:$|[\r\n])`)
 )
 
 type ActiveStream string
@@ -138,7 +139,7 @@ func (c *Client) startPreset(cfg config.Config, preset int, expected ActiveStrea
 }
 
 func (c *Client) recallStreamingPreset(cfg config.Config, preset int) (string, error) {
-	return c.sendCommand(cfg, fmt.Sprintf("3*%d*%d.", cfg.StreamIndex, preset))
+	return c.sendCommand(cfg, streamingPresetRecallCommand(cfg.StreamIndex, preset))
 }
 
 func (c *Client) setStreamEnabled(cfg config.Config, enabled bool) (string, error) {
@@ -146,16 +147,19 @@ func (c *Client) setStreamEnabled(cfg config.Config, enabled bool) (string, erro
 	if enabled {
 		value = 1
 	}
-	return c.sendCommand(cfg, fmt.Sprintf("E %d*%d STRC}", cfg.StreamIndex, value))
+	return c.sendCommand(cfg, streamEnabledCommand(cfg.StreamIndex, value))
 }
 
 func (c *Client) queryStreamEnabled(cfg config.Config) (bool, error) {
-	response, err := c.sendCommand(cfg, fmt.Sprintf("E %d)STRC}", cfg.StreamIndex))
+	response, err := c.sendCommand(cfg, streamEnabledQuery(cfg.StreamIndex))
 	if err != nil {
 		return false, err
 	}
 	match := streamEnabledRegex.FindStringSubmatch(response)
-	return len(match) == 2 && match[1] == "1", nil
+	if len(match) != 2 {
+		return false, fmt.Errorf("unexpected stream status response %q", printable(response))
+	}
+	return match[1] == "1", nil
 }
 
 func (c *Client) queryActiveStreamingPreset(cfg config.Config) (*int, error) {
@@ -219,7 +223,7 @@ func (c *Client) Diagnose(cfg config.Config) Diagnosis {
 		return Diagnosis{Stage: StageHandshake, Address: addr, Summary: "Could not clear the connection deadline.", Detail: err.Error()}
 	}
 
-	query := fmt.Sprintf("E %d)STRC}", cfg.StreamIndex)
+	query := streamEnabledQuery(cfg.StreamIndex)
 	raw, err := probeCommand(client, query, probeWindow)
 	if err != nil {
 		return Diagnosis{
@@ -279,7 +283,7 @@ func probeCommand(client *ssh.Client, command string, wait time.Duration) (strin
 	if err := session.Shell(); err != nil {
 		return "", err
 	}
-	if _, err := io.WriteString(stdin, command+"\r\n"); err != nil {
+	if _, err := io.WriteString(stdin, command); err != nil {
 		return "", err
 	}
 
@@ -330,6 +334,21 @@ func printable(value string) string {
 		}
 	}
 	return out.String()
+}
+
+// In Extron SIS tables, E means the ESC byte and } means carriage return.
+// They are notation, not literal characters. Basic commands such as 46I and
+// preset recall use their final command character as the terminator.
+func streamEnabledCommand(streamIndex, enabled int) string {
+	return fmt.Sprintf("\x1b%d*%dSTRC\r", streamIndex, enabled)
+}
+
+func streamEnabledQuery(streamIndex int) string {
+	return fmt.Sprintf("\x1b%dSTRC\r", streamIndex)
+}
+
+func streamingPresetRecallCommand(streamIndex, preset int) string {
+	return fmt.Sprintf("3*%d*%d.", streamIndex, preset)
 }
 
 func networkDiagnosis(cfg config.Config, addr string, err error) Diagnosis {
@@ -399,12 +418,19 @@ func sshDiagnosis(addr string, err error) Diagnosis {
 }
 
 func (c *Client) sendCommand(cfg config.Config, command string) (string, error) {
-	client, err := ssh.Dial("tcp", smpAddress(cfg), clientConfig(cfg))
+	client, err := dialClient(cfg)
 	if err != nil {
 		return "", err
 	}
 	defer client.Close()
-	return runCommand(client, command)
+	response, err := runCommand(client, command)
+	if err != nil {
+		return "", err
+	}
+	if match := sisErrorRegex.FindStringSubmatch(response); len(match) == 2 {
+		return "", fmt.Errorf("SMP returned SIS error E%s", match[1])
+	}
+	return response, nil
 }
 
 // smpAddress keeps IPv6 hosts usable: ParseHostPort stores them without
@@ -415,11 +441,50 @@ func smpAddress(cfg config.Config) string {
 
 func clientConfig(cfg config.Config) *ssh.ClientConfig {
 	return &ssh.ClientConfig{
-		User:            cfg.SmpUsername,
-		Auth:            []ssh.AuthMethod{ssh.Password(cfg.SmpPassword)},
+		User: strings.TrimSpace(cfg.SmpUsername),
+		Auth: []ssh.AuthMethod{
+			ssh.Password(cfg.SmpPassword),
+			ssh.KeyboardInteractive(passwordChallenge(cfg.SmpPassword)),
+		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         connectTimeout,
 	}
+}
+
+func passwordChallenge(password string) ssh.KeyboardInteractiveChallenge {
+	return func(_ string, _ string, questions []string, _ []bool) ([]string, error) {
+		answers := make([]string, len(questions))
+		for index, question := range questions {
+			if strings.Contains(strings.ToLower(question), "password") {
+				answers[index] = password
+			}
+		}
+		return answers, nil
+	}
+}
+
+// dialClient applies the timeout to both the TCP connection and SSH
+// authentication. ssh.Dial only bounds the TCP portion.
+func dialClient(cfg config.Config) (*ssh.Client, error) {
+	addr := smpAddress(cfg)
+	conn, err := net.DialTimeout("tcp", addr, connectTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Now().Add(connectTimeout)); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	sshConn, channels, requests, err := ssh.NewClientConn(conn, addr, clientConfig(cfg))
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		_ = sshConn.Close()
+		return nil, err
+	}
+	return ssh.NewClient(sshConn, channels, requests), nil
 }
 
 func runCommand(client *ssh.Client, command string) (string, error) {
@@ -441,7 +506,7 @@ func runCommand(client *ssh.Client, command string) (string, error) {
 		return "", err
 	}
 
-	if _, err := io.WriteString(stdin, command+"\r\n"); err != nil {
+	if _, err := io.WriteString(stdin, command); err != nil {
 		return "", err
 	}
 
@@ -461,7 +526,7 @@ func readUntilTerminator(r io.Reader, timeout time.Duration) (string, error) {
 			n, err := r.Read(tmp)
 			if n > 0 {
 				buf.Write(tmp[:n])
-				if strings.Contains(buf.String(), "]") {
+				if bytes.Contains(buf.Bytes(), []byte("\r\n")) {
 					ch <- result{data: strings.TrimSpace(buf.String())}
 					return
 				}

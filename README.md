@@ -133,10 +133,14 @@ unlocked, which is the moment the APK is installed.
 For stream 1 (Archive Ch A) and preset `P`:
 
 - Recall streaming preset: `3*1*P.`
-- Enable stream: `E 1*1 STRC}`
-- Disable stream: `E 1*0 STRC}`
-- Query stream enabled: `E 1)STRC}`
+- Enable stream: `E1*1STRC}`
+- Disable stream: `E1*0STRC}`
+- Query stream enabled: `E1STRC}`
 - Query selected streaming preset: `46I`
+
+In Extron's command-table notation, `E` is the escape byte (`0x1b`), `}` is
+a carriage return (`0x0d`), and `]` in a response is CR/LF. They are not
+literal characters. The Go client sends and reads those control bytes.
 
 The app always controls Archive Channel A. That is the encoder used for the
 YouTube live push. The on-screen player uses the SMP confidence/secondary
