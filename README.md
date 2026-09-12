@@ -144,11 +144,29 @@ In Extron's command-table notation, `E` is the escape byte (`0x1b`), `}` is
 a carriage return (`0x0d`), and `]` in a response is CR/LF. They are not
 literal characters. The Go client sends and reads those control bytes.
 
-Starting a language stops both encoders, recalls that language's RTMP preset
-onto Archive, recalls the Confidence RTSP preset onto Confidence, then enables
-Confidence followed by Archive. Stop disables both encoders. All commands from
-one button press share one SSH login to avoid exhausting the SMP's connection
-limit. The on-screen player uses Confidence through go2rtc.
+Starting a language reads both encoders first, then touches only what is
+wrong. An encoder that already runs the preset being asked for is left alone,
+because recalling a preset means switching the encoder off first: re-tapping
+the live language would otherwise interrupt the push, and a language switch
+would break the Confidence feed the preview is playing. So a switch between
+languages sends nine commands and never disturbs Confidence, while tapping the
+language that is already live sends four and changes nothing.
+
+An encoder that does need changing is switched off, given its preset, and
+switched back on, Confidence before Archive so the preview has a feed first.
+Three seconds later the Archive encoder is read back: the SMP reports an
+encoder as enabled the moment it is switched on, which is before the
+destination has been contacted, so a push that is refused would otherwise be
+announced as a live stream.
+
+Deciding what to skip relies on the unit reporting `0*modified, not saved`
+whenever a live configuration has drifted from its saved preset. Switching an
+encoder off is itself enough to cause that, so anything uncertain falls through
+to a full recall.
+
+Stop disables both encoders. All commands from one button press share one SSH
+login to avoid exhausting the SMP's connection limit. The on-screen player uses
+Confidence through go2rtc.
 
 ## When the SMP signs in but answers nothing
 

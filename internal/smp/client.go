@@ -104,11 +104,11 @@ func (c *Client) QueryState(cfg config.Config) (State, bool) {
 }
 
 func (c *Client) queryState(cfg config.Config) State {
-	enabled, err := c.queryStreamEnabled(cfg)
+	enabled, err := c.queryStreamEnabled(cfg, cfg.StreamIndex)
 	if err != nil {
 		return failed("SMP is not reachable", err)
 	}
-	preset, err := c.queryActiveStreamingPreset(cfg)
+	preset, err := c.queryActiveStreamingPreset(cfg, cfg.StreamIndex)
 	if err != nil {
 		return failed("SMP is not reachable", err)
 	}
@@ -180,22 +180,39 @@ func (c *Client) start(cfg config.Config, preset int, expected ActiveStream) Sta
 }
 
 func (c *Client) startPreset(cfg config.Config, preset int, expected ActiveStream) State {
-	if err := c.stopBoth(cfg); err != nil {
+	// Read both encoders before disturbing either. Recalling a preset means
+	// switching the encoder off first, so an encoder that is already running
+	// what was asked for is left alone: re-tapping the live language must not
+	// interrupt the push, and a language switch must not break the Confidence
+	// feed the on-screen preview is playing.
+	archive, err := c.readStream(cfg, archiveStreamIndex)
+	if err != nil {
 		return failed("Start failed", err)
 	}
-	if _, err := c.recallStreamingPreset(cfg, archiveStreamIndex, preset); err != nil {
-		return failed("Start failed", fmt.Errorf("recall Archive preset %d: %w", preset, err))
+	confidence, err := c.readStream(cfg, confidenceStreamIndex)
+	if err != nil {
+		return failed("Start failed", err)
 	}
-	if _, err := c.recallStreamingPreset(cfg, confidenceStreamIndex, cfg.ConfidencePreset); err != nil {
-		return failed("Start failed", fmt.Errorf("recall Confidence preset %d: %w", cfg.ConfidencePreset, err))
+	if archive.running(preset) && confidence.running(cfg.ConfidencePreset) {
+		return alreadyStreaming(preset, expected)
 	}
-	if _, err := c.setStreamEnabled(cfg, confidenceStreamIndex, true); err != nil {
-		return failed("Start failed", fmt.Errorf("start Confidence encoder: %w", err))
+
+	startedConfidence := false
+	if !confidence.running(cfg.ConfidencePreset) {
+		if err := c.restartStream(cfg, confidenceStreamIndex, cfg.ConfidencePreset); err != nil {
+			return failed("Start failed", err)
+		}
+		startedConfidence = true
 	}
-	if _, err := c.setStreamEnabled(cfg, archiveStreamIndex, true); err != nil {
-		// Do not leave the preview encoder running after a partial start.
-		_, _ = c.setStreamEnabled(cfg, confidenceStreamIndex, false)
-		return failed("Start failed", fmt.Errorf("start Archive encoder: %w", err))
+	if !archive.running(preset) {
+		if err := c.restartStream(cfg, archiveStreamIndex, preset); err != nil {
+			// Do not leave a preview encoder running for a stream that never
+			// started, but do not switch off one that was already running.
+			if startedConfidence {
+				_, _ = c.setStreamEnabled(cfg, confidenceStreamIndex, false)
+			}
+			return failed("Start failed", err)
+		}
 	}
 
 	// The unit reports an encoder as enabled the moment it is switched on,
@@ -215,12 +232,81 @@ func (c *Client) startPreset(cfg config.Config, preset int, expected ActiveStrea
 		))
 	}
 	state.ActiveStream = expected
-	if expected == ActiveEnglish {
-		state.StatusMessage = fmt.Sprintf("Streaming English (preset %d)", preset)
-	} else {
-		state.StatusMessage = fmt.Sprintf("Streaming Mandarin (preset %d)", preset)
-	}
+	state.StatusMessage = languageStatus(expected, preset)
 	return state
+}
+
+// restartStream puts one encoder onto a preset. It is switched off first
+// because the SMP refuses to rewrite a destination while that encoder is live.
+func (c *Client) restartStream(cfg config.Config, streamIndex, preset int) error {
+	name := streamName(streamIndex)
+	if _, err := c.setStreamEnabled(cfg, streamIndex, false); err != nil {
+		return fmt.Errorf("stop %s encoder: %w", name, err)
+	}
+	if _, err := c.recallStreamingPreset(cfg, streamIndex, preset); err != nil {
+		return fmt.Errorf("recall %s preset %d: %w", name, preset, err)
+	}
+	if _, err := c.setStreamEnabled(cfg, streamIndex, true); err != nil {
+		return fmt.Errorf("start %s encoder: %w", name, err)
+	}
+	return nil
+}
+
+// streamState is one encoder's live configuration, which the SMP reports as
+// two separate answers: whether it is switched on, and which saved preset its
+// configuration still matches.
+type streamState struct {
+	enabled bool
+	preset  *int
+}
+
+// running reports whether this encoder is already streaming the given preset.
+// The SMP answers a preset query with "0*modified, not saved" once the live
+// configuration has drifted from the saved preset, and switching an encoder
+// off is itself enough to cause that, so a match means the configuration
+// really is the preset's rather than merely having been selected once.
+func (s streamState) running(preset int) bool {
+	return s.enabled && s.preset != nil && *s.preset == preset
+}
+
+func (c *Client) readStream(cfg config.Config, streamIndex int) (streamState, error) {
+	name := streamName(streamIndex)
+	enabled, err := c.queryStreamEnabled(cfg, streamIndex)
+	if err != nil {
+		return streamState{}, fmt.Errorf("read %s encoder: %w", name, err)
+	}
+	preset, err := c.queryActiveStreamingPreset(cfg, streamIndex)
+	if err != nil {
+		return streamState{}, fmt.Errorf("read %s preset: %w", name, err)
+	}
+	return streamState{enabled: enabled, preset: preset}, nil
+}
+
+func streamName(streamIndex int) string {
+	if streamIndex == confidenceStreamIndex {
+		return "Confidence"
+	}
+	return "Archive"
+}
+
+func languageStatus(stream ActiveStream, preset int) string {
+	if stream == ActiveEnglish {
+		return fmt.Sprintf("Streaming English (preset %d)", preset)
+	}
+	return fmt.Sprintf("Streaming Mandarin (preset %d)", preset)
+}
+
+// alreadyStreaming reports the state of a stream that was found running what
+// was asked for, so nothing was sent to the unit and nothing needs confirming.
+func alreadyStreaming(preset int, expected ActiveStream) State {
+	return State{
+		ActiveStream:     expected,
+		StreamEnabled:    true,
+		ActivePreset:     &preset,
+		StatusMessage:    languageStatus(expected, preset),
+		SmpReachable:     true,
+		QueriedAtEpochMs: time.Now().UnixMilli(),
+	}
 }
 
 func (c *Client) stopBoth(cfg config.Config) error {
@@ -275,8 +361,8 @@ func (c *Client) setStreamEnabled(cfg config.Config, streamIndex int, enabled bo
 	})
 }
 
-func (c *Client) queryStreamEnabled(cfg config.Config) (bool, error) {
-	response, err := c.sendCommand(cfg, streamEnabledQuery(cfg.StreamIndex), matchesStreamStatus)
+func (c *Client) queryStreamEnabled(cfg config.Config, streamIndex int) (bool, error) {
+	response, err := c.sendCommand(cfg, streamEnabledQuery(streamIndex), matchesStreamStatus)
 	if err != nil {
 		return false, err
 	}
@@ -287,8 +373,8 @@ func (c *Client) queryStreamEnabled(cfg config.Config) (bool, error) {
 	return match[1] == "1", nil
 }
 
-func (c *Client) queryActiveStreamingPreset(cfg config.Config) (*int, error) {
-	response, err := c.sendCommand(cfg, streamingPresetQueryCommand(cfg.StreamIndex), func(line string) bool {
+func (c *Client) queryActiveStreamingPreset(cfg config.Config, streamIndex int) (*int, error) {
+	response, err := c.sendCommand(cfg, streamingPresetQueryCommand(streamIndex), func(line string) bool {
 		return presetResponseRegex.MatchString(line)
 	})
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,34 +52,22 @@ func TestStartRecallsLanguageOnArchiveAndPreviewOnConfidence(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			withoutStartConfirmWait(t)
-			var commands []string
-			client := &Client{send: func(
-				_ config.Config,
-				command string,
-				matchesResponse func(string) bool,
-			) (string, error) {
-				commands = append(commands, command)
-				response := responseForCommand(command)
-				if !matchesResponse(response) {
-					t.Fatalf("response %q did not match command %q", response, command)
-				}
-				return response, nil
-			}}
+			encoders := newFakeEncoders()
 			cfg := configuredTestConfig()
 
-			state := test.start(client, cfg)
+			state := test.start(encoders.client(), cfg)
 			want := []string{
-				"\x1b1*0STRC\r",
-				"\x1b3*0STRC\r",
-				fmt.Sprintf("3*1*%d.", test.languagePreset),
-				"3*3*3.",
-				"\x1b3*1STRC\r",
-				"\x1b1*1STRC\r",
-				"\x1b1STRC\r",
-				"46I",
+				// Both encoders are read before either is disturbed.
+				"\x1b1STRC\r", "46I",
+				"\x1b3STRC\r", "48I",
+				// Confidence is brought up first so the preview has a feed.
+				"\x1b3*0STRC\r", "3*3*3.", "\x1b3*1STRC\r",
+				"\x1b1*0STRC\r", fmt.Sprintf("3*1*%d.", test.languagePreset), "\x1b1*1STRC\r",
+				// Then the result is confirmed rather than assumed.
+				"\x1b1STRC\r", "46I",
 			}
-			if strings.Join(commands, "|") != strings.Join(want, "|") {
-				t.Fatalf("commands = %q, want %q", commands, want)
+			if strings.Join(encoders.commands, "|") != strings.Join(want, "|") {
+				t.Fatalf("commands = %q, want %q", encoders.commands, want)
 			}
 			if state.ActiveStream != test.active || !state.StreamEnabled {
 				t.Fatalf("state = %#v", state)
@@ -87,27 +76,163 @@ func TestStartRecallsLanguageOnArchiveAndPreviewOnConfidence(t *testing.T) {
 	}
 }
 
+// A language switch used to stop, re-recall, and restart the Confidence
+// encoder even though it was already serving the right preset, which broke the
+// feed the on-screen preview plays for no reason.
+func TestStartLeavesAWorkingConfidenceEncoderAlone(t *testing.T) {
+	withoutStartConfirmWait(t)
+	cfg := configuredTestConfig()
+	encoders := newFakeEncoders()
+	encoders.streaming(archiveStreamIndex, cfg.MandarinPreset)
+	encoders.streaming(confidenceStreamIndex, cfg.ConfidencePreset)
+
+	state := encoders.client().StartEnglish(cfg)
+	if state.LastError != nil {
+		t.Fatalf("start failed: %s", *state.LastError)
+	}
+	want := []string{
+		"\x1b1STRC\r", "46I",
+		"\x1b3STRC\r", "48I",
+		"\x1b1*0STRC\r", fmt.Sprintf("3*1*%d.", cfg.EnglishPreset), "\x1b1*1STRC\r",
+		"\x1b1STRC\r", "46I",
+	}
+	if strings.Join(encoders.commands, "|") != strings.Join(want, "|") {
+		t.Fatalf("commands = %q, want %q", encoders.commands, want)
+	}
+	if state.ActiveStream != ActiveEnglish {
+		t.Fatalf("state = %#v", state)
+	}
+}
+
+// Tapping the language that is already running must not interrupt the push,
+// so nothing is sent beyond the two reads that establish it is already right.
+func TestStartDoesNothingWhenThatLanguageIsAlreadyLive(t *testing.T) {
+	cfg := configuredTestConfig()
+	encoders := newFakeEncoders()
+	encoders.streaming(archiveStreamIndex, cfg.EnglishPreset)
+	encoders.streaming(confidenceStreamIndex, cfg.ConfidencePreset)
+
+	started := time.Now()
+	state := encoders.client().StartEnglish(cfg)
+	// Deliberately not shortening startConfirmWait: there is nothing to
+	// confirm when nothing was changed.
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Errorf("took %s, want no settle delay", elapsed)
+	}
+	want := []string{"\x1b1STRC\r", "46I", "\x1b3STRC\r", "48I"}
+	if strings.Join(encoders.commands, "|") != strings.Join(want, "|") {
+		t.Fatalf("commands = %q, want %q", encoders.commands, want)
+	}
+	if state.ActiveStream != ActiveEnglish || !state.StreamEnabled {
+		t.Fatalf("state = %#v", state)
+	}
+	if state.StatusMessage != "Streaming English (preset 2)" {
+		t.Errorf("status = %q", state.StatusMessage)
+	}
+}
+
+// fakeEncoders models the pair of encoders closely enough to exercise the
+// decisions a start makes. Switching one off marks its configuration as
+// drifted from the saved preset, which is what the unit itself reports.
+type fakeEncoders struct {
+	enabled  map[int]bool
+	recalled map[int]int
+	modified map[int]bool
+	// dropped names an encoder that refuses to stay switched on, the way the
+	// unit behaves when it cannot reach a destination.
+	dropped  int
+	commands []string
+}
+
+func newFakeEncoders() *fakeEncoders {
+	return &fakeEncoders{
+		enabled:  map[int]bool{},
+		recalled: map[int]int{},
+		modified: map[int]bool{},
+	}
+}
+
+// streaming puts an encoder in the state of already running a preset.
+func (f *fakeEncoders) streaming(streamIndex, preset int) {
+	f.enabled[streamIndex] = true
+	f.recalled[streamIndex] = preset
+	f.modified[streamIndex] = false
+}
+
+func (f *fakeEncoders) client() *Client {
+	return &Client{send: f.send}
+}
+
+func (f *fakeEncoders) send(
+	_ config.Config,
+	command string,
+	matchesResponse func(string) bool,
+) (string, error) {
+	f.commands = append(f.commands, command)
+	response, ok := f.respond(command)
+	if !ok {
+		return "", fmt.Errorf("unexpected command %q", printable(command))
+	}
+	if !matchesResponse(response) {
+		return "", fmt.Errorf("response %q did not match command %q", response, printable(command))
+	}
+	return response, nil
+}
+
+func (f *fakeEncoders) respond(command string) (string, bool) {
+	if match := fakeRecallRegex.FindStringSubmatch(command); match != nil {
+		streamIndex, preset := atoiOrZero(match[1]), atoiOrZero(match[2])
+		f.recalled[streamIndex] = preset
+		// The configuration only matches the preset once the encoder is on,
+		// because the preset carries the enabled flag too.
+		f.modified[streamIndex] = !f.enabled[streamIndex]
+		return fmt.Sprintf("3Rpr%02d*%02d", streamIndex, preset), true
+	}
+	for _, streamIndex := range []int{archiveStreamIndex, confidenceStreamIndex} {
+		switch command {
+		case streamEnabledQuery(streamIndex):
+			if f.enabled[streamIndex] {
+				return "1", true
+			}
+			return "0", true
+		case streamingPresetQueryCommand(streamIndex):
+			preset := f.recalled[streamIndex]
+			if preset == 0 || f.modified[streamIndex] {
+				return "0*modified, not saved", true
+			}
+			return fmt.Sprintf("%d*STREAMING PRESET %02d", preset, preset), true
+		case streamEnabledCommand(streamIndex, 0):
+			f.enabled[streamIndex] = false
+			f.modified[streamIndex] = true
+			return fmt.Sprintf("Strc%d*0", streamIndex), true
+		case streamEnabledCommand(streamIndex, 1):
+			f.enabled[streamIndex] = streamIndex != f.dropped
+			f.modified[streamIndex] = !f.enabled[streamIndex]
+			return fmt.Sprintf("Strc%d*1", streamIndex), true
+		}
+	}
+	return "", false
+}
+
+var fakeRecallRegex = regexp.MustCompile(`^3\*(\d+)\*(\d+)\.$`)
+
+func atoiOrZero(value string) int {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
 // A destination the unit cannot reach shows up as the encoder switching
 // itself off again moments after being started, which has to be reported
 // rather than announced as a live stream.
 func TestStartFailsWhenTheEncoderDoesNotStayUp(t *testing.T) {
 	withoutStartConfirmWait(t)
-	client := &Client{send: func(
-		_ config.Config,
-		command string,
-		matchesResponse func(string) bool,
-	) (string, error) {
-		response := responseForCommand(command)
-		if command == streamEnabledQuery(1) {
-			response = "0"
-		}
-		if !matchesResponse(response) {
-			t.Fatalf("response %q did not match command %q", response, command)
-		}
-		return response, nil
-	}}
+	encoders := newFakeEncoders()
+	encoders.dropped = archiveStreamIndex
 
-	state := client.StartMandarin(configuredTestConfig())
+	state := encoders.client().StartMandarin(configuredTestConfig())
 	if state.LastError == nil {
 		t.Fatal("a start whose encoder stopped again should report an error")
 	}
