@@ -93,6 +93,16 @@ func liveConfig(t *testing.T) (config.Config, bool) {
 		}
 		cfg.SmpSSHPort = parsed
 	}
+	// SMP_STREAM aims the queries at one encoder: 1 is Archive and 3 is
+	// Confidence, which is the only way to read the second one, since the
+	// saved configuration always drives Archive.
+	if stream := strings.TrimSpace(os.Getenv("SMP_STREAM")); stream != "" {
+		parsed, err := strconv.Atoi(stream)
+		if err != nil {
+			t.Fatalf("SMP_STREAM: %v", err)
+		}
+		cfg.StreamIndex = parsed
+	}
 	cfg.SmpPassword = livePassword(t)
 	return cfg, true
 }
