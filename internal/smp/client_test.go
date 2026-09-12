@@ -50,6 +50,7 @@ func TestStartRecallsLanguageOnArchiveAndPreviewOnConfidence(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			withoutStartConfirmWait(t)
 			var commands []string
 			client := &Client{send: func(
 				_ config.Config,
@@ -84,6 +85,47 @@ func TestStartRecallsLanguageOnArchiveAndPreviewOnConfidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A destination the unit cannot reach shows up as the encoder switching
+// itself off again moments after being started, which has to be reported
+// rather than announced as a live stream.
+func TestStartFailsWhenTheEncoderDoesNotStayUp(t *testing.T) {
+	withoutStartConfirmWait(t)
+	client := &Client{send: func(
+		_ config.Config,
+		command string,
+		matchesResponse func(string) bool,
+	) (string, error) {
+		response := responseForCommand(command)
+		if command == streamEnabledQuery(1) {
+			response = "0"
+		}
+		if !matchesResponse(response) {
+			t.Fatalf("response %q did not match command %q", response, command)
+		}
+		return response, nil
+	}}
+
+	state := client.StartMandarin(configuredTestConfig())
+	if state.LastError == nil {
+		t.Fatal("a start whose encoder stopped again should report an error")
+	}
+	if state.StatusMessage != "Start failed" {
+		t.Errorf("status = %q, want Start failed", state.StatusMessage)
+	}
+	if state.ActiveStream != ActiveNone {
+		t.Errorf("active stream = %q, want none", state.ActiveStream)
+	}
+}
+
+// withoutStartConfirmWait removes the settle delay, which is there for a real
+// unit rather than for a stubbed one.
+func withoutStartConfirmWait(t *testing.T) {
+	t.Helper()
+	previous := startConfirmWait
+	startConfirmWait = 0
+	t.Cleanup(func() { startConfirmWait = previous })
 }
 
 func TestStopDisablesArchiveAndConfidence(t *testing.T) {

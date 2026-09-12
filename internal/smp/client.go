@@ -39,6 +39,12 @@ var (
 	presetRecallRegex   = regexp.MustCompile(`(?i)^3Rpr(\d+)\*(\d+)$`)
 )
 
+// startConfirmWait is how long a start waits before reading the encoder back.
+// Measured on firmware 2.11, the six commands of a language switch complete in
+// about two and a half seconds, and an encoder that is going to fall over does
+// so shortly after. It is a variable so tests need not wait.
+var startConfirmWait = 3 * time.Second
+
 type ActiveStream string
 
 const (
@@ -192,14 +198,27 @@ func (c *Client) startPreset(cfg config.Config, preset int, expected ActiveStrea
 		return failed("Start failed", fmt.Errorf("start Archive encoder: %w", err))
 	}
 
+	// The unit reports an encoder as enabled the moment it is switched on,
+	// which is before the destination has been contacted. A push that is
+	// going to be refused drops the encoder again a second or two later, so
+	// the result is confirmed rather than announced on trust.
+	time.Sleep(startConfirmWait)
+
 	state := c.queryState(cfg)
-	if state.StreamEnabled {
-		state.ActiveStream = expected
-		if expected == ActiveEnglish {
-			state.StatusMessage = fmt.Sprintf("Streaming English (preset %d)", preset)
-		} else {
-			state.StatusMessage = fmt.Sprintf("Streaming Mandarin (preset %d)", preset)
-		}
+	if state.LastError != nil {
+		return state
+	}
+	if !state.StreamEnabled {
+		return failed("Start failed", fmt.Errorf(
+			"the Archive encoder stopped within %s of starting; check that preset %d has a reachable destination",
+			startConfirmWait, preset,
+		))
+	}
+	state.ActiveStream = expected
+	if expected == ActiveEnglish {
+		state.StatusMessage = fmt.Sprintf("Streaming English (preset %d)", preset)
+	} else {
+		state.StatusMessage = fmt.Sprintf("Streaming Mandarin (preset %d)", preset)
 	}
 	return state
 }
