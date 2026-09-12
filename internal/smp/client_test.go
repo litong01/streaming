@@ -135,14 +135,44 @@ func responseForCommand(command string) string {
 		return "1"
 	case "46I":
 		return "2*STREAMING PRESET 02"
+	// The unit pads both numbers in a recall reply to two digits.
 	case "3*1*1.":
-		return "3Rpr1*1"
+		return "3Rpr01*01"
 	case "3*1*2.":
-		return "3Rpr1*2"
+		return "3Rpr01*02"
 	case "3*3*3.":
-		return "3Rpr3*3"
+		return "3Rpr03*03"
 	default:
 		return "E10"
+	}
+}
+
+// Firmware 2.11 answers 3*3*3. with 3Rpr03*03. Matching that reply as literal
+// text is what made every Start press wait out its timeout and report a
+// failure for a recall the unit had already carried out.
+func TestPresetRecallReplyPaddingIsAccepted(t *testing.T) {
+	tests := []struct {
+		reply  string
+		stream int
+		preset int
+		want   bool
+	}{
+		{reply: "3Rpr03*03", stream: 3, preset: 3, want: true},
+		{reply: "3Rpr01*01", stream: 1, preset: 1, want: true},
+		{reply: "3Rpr01*11", stream: 1, preset: 11, want: true},
+		{reply: "3Rpr1*1", stream: 1, preset: 1, want: true},
+		{reply: "3rpr01*02", stream: 1, preset: 2, want: true},
+		{reply: "3Rpr01*02", stream: 1, preset: 1},
+		{reply: "3Rpr03*01", stream: 1, preset: 1},
+		{reply: "Strc1*1", stream: 1, preset: 1},
+		{reply: "E13", stream: 1, preset: 1},
+	}
+	for _, test := range tests {
+		got := matchesPresetRecall(test.reply, test.stream, test.preset)
+		if got != test.want {
+			t.Errorf("%q for stream %d preset %d = %t, want %t",
+				test.reply, test.stream, test.preset, got, test.want)
+		}
 	}
 }
 

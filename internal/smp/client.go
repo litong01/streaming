@@ -36,6 +36,7 @@ var (
 	singlePresetRegex   = regexp.MustCompile(`^(\d+)\*`)
 	sisErrorRegex       = regexp.MustCompile(`(?i)^E(10|12|13|14|17|18|22|24|26|28)$`)
 	presetResponseRegex = regexp.MustCompile(`^\d+\*`)
+	presetRecallRegex   = regexp.MustCompile(`(?i)^3Rpr(\d+)\*(\d+)$`)
 )
 
 type ActiveStream string
@@ -216,10 +217,28 @@ func (c *Client) stopBoth(cfg config.Config) error {
 }
 
 func (c *Client) recallStreamingPreset(cfg config.Config, streamIndex, preset int) (string, error) {
-	expected := fmt.Sprintf("3Rpr%d*%d", streamIndex, preset)
 	return c.sendCommand(cfg, streamingPresetRecallCommand(streamIndex, preset), func(line string) bool {
-		return strings.EqualFold(line, expected)
+		return matchesPresetRecall(line, streamIndex, preset)
 	})
+}
+
+// matchesPresetRecall compares the numbers rather than the text, because the
+// SMP 351 pads both of them to two digits: 3*3*3. is answered with 3Rpr03*03,
+// not the 3Rpr3*3 that the command itself suggests.
+func matchesPresetRecall(line string, streamIndex, preset int) bool {
+	match := presetRecallRegex.FindStringSubmatch(strings.TrimSpace(line))
+	if len(match) != 3 {
+		return false
+	}
+	stream, err := strconv.Atoi(match[1])
+	if err != nil {
+		return false
+	}
+	recalled, err := strconv.Atoi(match[2])
+	if err != nil {
+		return false
+	}
+	return stream == streamIndex && recalled == preset
 }
 
 func (c *Client) setStreamEnabled(cfg config.Config, streamIndex int, enabled bool) (string, error) {
