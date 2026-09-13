@@ -8,27 +8,20 @@ import (
 	"testing"
 )
 
-func TestDefaultPresetMapping(t *testing.T) {
-	cfg := Default()
-	if cfg.EnglishPreset != 2 || cfg.MandarinPreset != 1 {
-		t.Fatalf(
-			"unexpected defaults: English=%d Mandarin=%d",
-			cfg.EnglishPreset,
-			cfg.MandarinPreset,
-		)
-	}
-}
-
-func TestLoadMigratesOldDefaultPresetMapping(t *testing.T) {
+// A configuration written by a build that still recalled presets loses the
+// preset numbers, and its SIS port gives way to the SMP's web port, which is
+// where the streams are started now.
+func TestLoadMigratesAPresetConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	oldConfig := []byte(`{
+	  "schemaVersion": 3,
 	  "smpHost": "192.0.2.1",
-	  "smpSSHPort": 22023,
+	  "smpSshPort": 22023,
 	  "smpUsername": "admin",
 	  "httpPort": 8080,
 	  "streamIndex": 1,
-	  "englishPreset": 1,
-	  "mandarinPreset": 2,
+	  "englishPreset": 2,
+	  "mandarinPreset": 1,
 	  "pollIntervalSeconds": 3
 	}`)
 	if err := os.WriteFile(path, oldConfig, 0o600); err != nil {
@@ -40,55 +33,40 @@ func TestLoadMigratesOldDefaultPresetMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := store.Get()
-	if cfg.EnglishPreset != 2 || cfg.MandarinPreset != 1 {
-		t.Fatalf(
-			"mapping was not migrated: English=%d Mandarin=%d",
-			cfg.EnglishPreset,
-			cfg.MandarinPreset,
-		)
+	if cfg.SmpPort != DefaultSmpPort {
+		t.Fatalf("SMP port = %d, want %d", cfg.SmpPort, DefaultSmpPort)
+	}
+	if cfg.SmpHost != "192.0.2.1" || cfg.SmpUsername != "admin" {
+		t.Fatalf("connection details changed: %+v", cfg)
 	}
 	if cfg.SchemaVersion != CurrentSchemaVersion {
 		t.Fatalf("schema version = %d, want %d", cfg.SchemaVersion, CurrentSchemaVersion)
 	}
-}
 
-func TestLoadPreservesCustomPresetMapping(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	oldConfig := []byte(`{
-	  "englishPreset": 11,
-	  "mandarinPreset": 12
-	}`)
-	if err := os.WriteFile(path, oldConfig, 0o600); err != nil {
+	rewritten, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
+	for _, gone := range []string{"englishPreset", "mandarinPreset", "streamIndex", "smpSshPort"} {
+		if bytes.Contains(rewritten, []byte(gone)) {
+			t.Fatalf("rewritten configuration still carries %q", gone)
+		}
+	}
+}
 
+// A port the operator chose is theirs to keep, so it survives a migration that
+// is only meant to clear the SIS port away.
+func TestLoadKeepsAnExplicitPort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":4,"smpPort":80}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	store, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := store.Get()
-	if cfg.EnglishPreset != 11 || cfg.MandarinPreset != 12 {
-		t.Fatalf(
-			"custom mapping changed: English=%d Mandarin=%d",
-			cfg.EnglishPreset,
-			cfg.MandarinPreset,
-		)
-	}
-}
-
-func TestLoadForcesArchiveChannelA(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	oldConfig := []byte(`{"streamIndex": 2}`)
-	if err := os.WriteFile(path, oldConfig, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := store.Get().StreamIndex; got != DefaultStreamIndex {
-		t.Fatalf("stream index = %d, want %d", got, DefaultStreamIndex)
+	if got := store.Get().SmpPort; got != 80 {
+		t.Fatalf("SMP port = %d, want 80", got)
 	}
 }
 
@@ -99,10 +77,10 @@ func TestParseHostPort(t *testing.T) {
 		host    string
 		want    int
 	}{
-		{"192.0.2.10", 0, "192.0.2.10", DefaultSmpSSHPort},
-		{"192.0.2.10:22024", 0, "192.0.2.10", 22024},
-		{"smp.local", 22023, "smp.local", 22023},
-		{"[2001:db8::1]:22023", 0, "2001:db8::1", 22023},
+		{"192.0.2.10", 0, "192.0.2.10", DefaultSmpPort},
+		{"192.0.2.10:8443", 0, "192.0.2.10", 8443},
+		{"smp.local", 80, "smp.local", 80},
+		{"[2001:db8::1]:443", 0, "2001:db8::1", 443},
 	}
 	for _, test := range tests {
 		host, port, err := ParseHostPort(test.address, test.port)
@@ -123,27 +101,32 @@ func TestParseHostPortRejectsURLAndSpaces(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsSamePresetsAndLowHTTPPort(t *testing.T) {
+func TestValidate(t *testing.T) {
 	cfg := Default()
 	cfg.SmpHost = "192.0.2.10"
 	cfg.SmpUsername = "admin"
-	cfg.EnglishPreset = 1
-	cfg.MandarinPreset = 1
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected preset collision error")
-	}
-	cfg.MandarinPreset = 2
-	cfg.HTTPPort = 80
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected HTTP port error")
-	}
-	cfg.HTTPPort = DefaultHTTPPort
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.MandarinPreset = cfg.EnglishPreset
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected preset collision error")
+
+	// The local server has to be reachable from Fully Kiosk without root, so
+	// a privileged port is rejected even though the SMP's own is one.
+	lowPort := cfg
+	lowPort.HTTPPort = 80
+	if err := lowPort.Validate(); err == nil {
+		t.Fatal("expected an HTTP port error")
+	}
+
+	noUser := cfg
+	noUser.SmpUsername = " "
+	if err := noUser.Validate(); err == nil {
+		t.Fatal("expected a missing username error")
+	}
+
+	badPort := cfg
+	badPort.SmpPort = 0
+	if err := badPort.Validate(); err == nil {
+		t.Fatal("expected an SMP port error")
 	}
 }
 

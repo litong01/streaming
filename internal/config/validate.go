@@ -10,8 +10,6 @@ import (
 const (
 	minUserPort = 1024
 	maxPort     = 65535
-	minPreset   = 1
-	maxPreset   = 32
 	maxHostLen  = 253
 	maxUserLen  = 64
 )
@@ -31,7 +29,7 @@ func ParseHostPort(address string, explicitPort int) (string, int, error) {
 	host := address
 	port := explicitPort
 	if port == 0 {
-		port = DefaultSmpSSHPort
+		port = DefaultSmpPort
 	}
 
 	if strings.HasPrefix(address, "[") {
@@ -61,7 +59,7 @@ func ParseHostPort(address string, explicitPort int) (string, int, error) {
 		return "", 0, fmt.Errorf("invalid SMP host")
 	}
 	if port < 1 || port > maxPort {
-		return "", 0, fmt.Errorf("SSH port must be between 1 and %d", maxPort)
+		return "", 0, fmt.Errorf("SMP port must be between 1 and %d", maxPort)
 	}
 	return host, port, nil
 }
@@ -70,25 +68,18 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.SmpHost) == "" || strings.TrimSpace(c.SmpUsername) == "" {
 		return fmt.Errorf("SMP host and username are required")
 	}
-	if _, _, err := ParseHostPort(c.SmpHost, c.SmpSSHPort); err != nil {
+	if _, _, err := ParseHostPort(c.SmpHost, c.SmpPort); err != nil {
 		return err
 	}
 	username := strings.TrimSpace(c.SmpUsername)
 	if len(username) > maxUserLen || containsControl(username) {
-		return fmt.Errorf("invalid SSH username")
+		return fmt.Errorf("invalid SMP username")
 	}
-	if c.SmpSSHPort < 1 || c.SmpSSHPort > maxPort {
-		return fmt.Errorf("SSH port must be between 1 and %d", maxPort)
+	if c.SmpPort < 1 || c.SmpPort > maxPort {
+		return fmt.Errorf("SMP port must be between 1 and %d", maxPort)
 	}
 	if c.HTTPPort < minUserPort || c.HTTPPort > maxPort {
 		return fmt.Errorf("HTTP port must be between %d and %d", minUserPort, maxPort)
-	}
-	if c.EnglishPreset < minPreset || c.EnglishPreset > maxPreset ||
-		c.MandarinPreset < minPreset || c.MandarinPreset > maxPreset {
-		return fmt.Errorf("preset numbers must be between %d and %d", minPreset, maxPreset)
-	}
-	if c.EnglishPreset == c.MandarinPreset {
-		return fmt.Errorf("English and Mandarin presets must be different")
 	}
 	return nil
 }
@@ -96,7 +87,7 @@ func (c Config) Validate() error {
 func parsePort(value string) (int, error) {
 	var port int
 	if _, err := fmt.Sscanf(value, "%d", &port); err != nil || port < 1 || port > maxPort {
-		return 0, fmt.Errorf("SSH port must be between 1 and %d", maxPort)
+		return 0, fmt.Errorf("SMP port must be between 1 and %d", maxPort)
 	}
 	return port, nil
 }

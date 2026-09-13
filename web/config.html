@@ -91,23 +91,25 @@
   <main class="panel">
     <h1>Configuration</h1>
     <p class="hint">
-      Set the Extron SMP connection once. Credentials stay on this device only.
-      Changing the HTTP port restarts the local server. The live preview comes
-      from the SMP itself and needs no extra setup.
+      Set the Extron SMP connection once, using the same sign-in as the SMP's
+      own web page. Credentials stay on this device only. Changing the HTTP
+      port restarts the local server. Where each language streams to is
+      configured on the SMP itself: Archive carries Mandarin and Confidence
+      carries English.
     </p>
 
     <form id="configForm">
       <div class="section-title">Extron SMP</div>
       <label>
         SMP address
-        <input id="smpAddress" name="smpAddress" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="192.168.1.10 or 192.168.1.10:22023" required>
+        <input id="smpAddress" name="smpAddress" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="192.168.1.10 or 192.168.1.10:443" required>
       </label>
       <label>
-        SSH username
+        SMP username
         <input id="smpUsername" name="smpUsername" type="text" autocomplete="username" required>
       </label>
       <label>
-        SSH password
+        SMP password
         <input id="smpPassword" name="smpPassword" type="password" autocomplete="current-password">
       </label>
 
@@ -115,16 +117,6 @@
       <label>
         HTTP port for Fully Kiosk Browser
         <input id="httpPort" name="httpPort" type="number" min="1024" max="65535" required>
-      </label>
-
-      <div class="section-title">Streaming presets</div>
-      <label>
-        Mandarin preset number
-        <input id="mandarinPreset" name="mandarinPreset" type="number" min="1" max="32" required>
-      </label>
-      <label>
-        English preset number
-        <input id="englishPreset" name="englishPreset" type="number" min="1" max="32" required>
       </label>
 
       <div id="saveMessage"></div>
@@ -140,11 +132,11 @@
   <script>
     const form = document.getElementById("configForm");
     const saveMessage = document.getElementById("saveMessage");
-    const DEFAULT_SSH_PORT = 22023;
+    const DEFAULT_SMP_PORT = 443;
 
     function formatAddress(host, port) {
       host = (host || "").trim();
-      port = Number(port) || DEFAULT_SSH_PORT;
+      port = Number(port) || DEFAULT_SMP_PORT;
       if (!host) return "";
       if (host.includes(":") && !host.startsWith("[")) return "[" + host + "]:" + port;
       return host + ":" + port;
@@ -159,9 +151,9 @@
 
       const bracket = raw.match(/^\[([^\]]+)\](?::(\d+))?$/);
       if (bracket) {
-        const port = bracket[2] ? Number(bracket[2]) : DEFAULT_SSH_PORT;
+        const port = bracket[2] ? Number(bracket[2]) : DEFAULT_SMP_PORT;
         if (!Number.isInteger(port) || port < 1 || port > 65535) {
-          return { error: "SSH port must be between 1 and 65535" };
+          return { error: "SMP port must be between 1 and 65535" };
         }
         return { host: bracket[1], port };
       }
@@ -172,22 +164,20 @@
         const host = raw.slice(0, colon).trim();
         if (!host) return { error: "SMP address is required" };
         if (!Number.isInteger(port) || port < 1 || port > 65535) {
-          return { error: "SSH port must be between 1 and 65535" };
+          return { error: "SMP port must be between 1 and 65535" };
         }
         return { host, port };
       }
 
-      return { host: raw, port: DEFAULT_SSH_PORT };
+      return { host: raw, port: DEFAULT_SMP_PORT };
     }
 
     async function loadConfig() {
       const response = await fetch("/api/config");
       const data = await response.json();
-      document.getElementById("smpAddress").value = formatAddress(data.smpHost, data.smpSshPort);
+      document.getElementById("smpAddress").value = formatAddress(data.smpHost, data.smpPort);
       document.getElementById("smpUsername").value = data.smpUsername || "";
       document.getElementById("httpPort").value = data.httpPort || 8080;
-      document.getElementById("englishPreset").value = data.englishPreset || 2;
-      document.getElementById("mandarinPreset").value = data.mandarinPreset || 1;
     }
 
     form.addEventListener("submit", async (event) => {
@@ -200,12 +190,10 @@
       saveMessage.textContent = "Saving...";
       const payload = {
         smpHost: address.host,
-        smpSshPort: address.port,
+        smpPort: address.port,
         smpUsername: document.getElementById("smpUsername").value.trim(),
         smpPassword: document.getElementById("smpPassword").value,
-        httpPort: Number(document.getElementById("httpPort").value),
-        englishPreset: Number(document.getElementById("englishPreset").value),
-        mandarinPreset: Number(document.getElementById("mandarinPreset").value)
+        httpPort: Number(document.getElementById("httpPort").value)
       };
       const response = await fetch("/api/config", {
         method: "POST",
@@ -230,9 +218,9 @@
     const STAGE_LABELS = {
       address: "Address",
       network: "Network",
-      handshake: "SSH",
       auth: "Credentials",
-      command: "SIS command",
+      command: "SMP API",
+      preview: "Live preview",
       ok: "Connected"
     };
 
@@ -255,14 +243,14 @@
         return;
       }
       testButton.disabled = true;
-      renderResult("", [["hint", "Testing connection. Every SSH channel type the SMP might use is tried, so allow up to half a minute..."]]);
+      renderResult("", [["hint", "Testing the connection..."]]);
       try {
         const response = await fetch("/api/config/test", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             smpHost: address.host,
-            smpSshPort: address.port,
+            smpPort: address.port,
             smpUsername: document.getElementById("smpUsername").value.trim(),
             smpPassword: document.getElementById("smpPassword").value
           })

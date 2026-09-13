@@ -14,13 +14,12 @@ import (
 )
 
 const (
-	DefaultSmpSSHPort          = 22023
+	// DefaultSmpPort is the SMP's own web port, which also serves its
+	// configuration API and its live preview.
+	DefaultSmpPort             = 443
 	DefaultHTTPPort            = 8080
-	DefaultStreamIndex         = 1
-	DefaultEnglishPreset       = 2
-	DefaultMandarinPreset      = 1
 	DefaultPollIntervalSeconds = 3
-	CurrentSchemaVersion       = 3
+	CurrentSchemaVersion       = 4
 )
 
 var encryptedFileMagic = []byte("STREAMING-CONFIG-V1\x00")
@@ -28,24 +27,19 @@ var encryptedFileMagic = []byte("STREAMING-CONFIG-V1\x00")
 type Config struct {
 	SchemaVersion       int    `json:"schemaVersion"`
 	SmpHost             string `json:"smpHost"`
-	SmpSSHPort          int    `json:"smpSshPort"`
+	SmpPort             int    `json:"smpPort"`
 	SmpUsername         string `json:"smpUsername"`
 	SmpPassword         string `json:"smpPassword"`
 	HTTPPort            int    `json:"httpPort"`
-	StreamIndex         int    `json:"streamIndex"`
-	EnglishPreset       int    `json:"englishPreset"`
-	MandarinPreset      int    `json:"mandarinPreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
 }
 
 type PublicConfig struct {
 	SmpHost             string `json:"smpHost"`
-	SmpSSHPort          int    `json:"smpSshPort"`
+	SmpPort             int    `json:"smpPort"`
 	SmpUsername         string `json:"smpUsername"`
 	HasPassword         bool   `json:"hasPassword"`
 	HTTPPort            int    `json:"httpPort"`
-	EnglishPreset       int    `json:"englishPreset"`
-	MandarinPreset      int    `json:"mandarinPreset"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
 	IsSmpConfigured     bool   `json:"isSmpConfigured"`
 }
@@ -67,11 +61,8 @@ type LoadOptions struct {
 func Default() Config {
 	return Config{
 		SchemaVersion:       CurrentSchemaVersion,
-		SmpSSHPort:          DefaultSmpSSHPort,
+		SmpPort:             DefaultSmpPort,
 		HTTPPort:            DefaultHTTPPort,
-		StreamIndex:         DefaultStreamIndex,
-		EnglishPreset:       DefaultEnglishPreset,
-		MandarinPreset:      DefaultMandarinPreset,
 		PollIntervalSeconds: DefaultPollIntervalSeconds,
 	}
 }
@@ -132,7 +123,7 @@ func LoadWithOptions(path string, options LoadOptions) (*Store, error) {
 		return nil, err
 	}
 	store.cfg = loaded
-	needsSave := migratePresetMapping(&store.cfg)
+	needsSave := migrate(&store.cfg)
 	store.cfg = withDefaults(store.cfg)
 	if needsSave || (len(store.key) != 0 && !wasEncrypted) {
 		if err := store.saveLocked(); err != nil {
@@ -161,12 +152,10 @@ func (s *Store) Public() PublicConfig {
 	cfg := s.Get()
 	return PublicConfig{
 		SmpHost:             cfg.SmpHost,
-		SmpSSHPort:          cfg.SmpSSHPort,
+		SmpPort:             cfg.SmpPort,
 		SmpUsername:         cfg.SmpUsername,
 		HasPassword:         cfg.SmpPassword != "",
 		HTTPPort:            cfg.HTTPPort,
-		EnglishPreset:       cfg.EnglishPreset,
-		MandarinPreset:      cfg.MandarinPreset,
 		PollIntervalSeconds: cfg.PollIntervalSeconds,
 		IsSmpConfigured:     cfg.IsSmpConfigured(),
 	}
@@ -271,18 +260,11 @@ func withDefaults(cfg Config) Config {
 	if cfg.SchemaVersion == 0 {
 		cfg.SchemaVersion = CurrentSchemaVersion
 	}
-	if cfg.SmpSSHPort == 0 {
-		cfg.SmpSSHPort = DefaultSmpSSHPort
+	if cfg.SmpPort == 0 {
+		cfg.SmpPort = DefaultSmpPort
 	}
 	if cfg.HTTPPort == 0 {
 		cfg.HTTPPort = DefaultHTTPPort
-	}
-	cfg.StreamIndex = DefaultStreamIndex
-	if cfg.EnglishPreset == 0 {
-		cfg.EnglishPreset = DefaultEnglishPreset
-	}
-	if cfg.MandarinPreset == 0 {
-		cfg.MandarinPreset = DefaultMandarinPreset
 	}
 	if cfg.PollIntervalSeconds == 0 {
 		cfg.PollIntervalSeconds = DefaultPollIntervalSeconds
@@ -290,12 +272,16 @@ func withDefaults(cfg Config) Config {
 	return cfg
 }
 
-func migratePresetMapping(cfg *Config) bool {
-	originalVersion := cfg.SchemaVersion
-	if originalVersion < 2 && cfg.EnglishPreset == 1 && cfg.MandarinPreset == 2 {
-		cfg.EnglishPreset = DefaultEnglishPreset
-		cfg.MandarinPreset = DefaultMandarinPreset
+// migrate brings a file written by an earlier build up to date. Version 4
+// dropped the streaming presets and the SIS port: the unit's own RTMP start
+// and stop are driven over its web port now, so a file that still carries the
+// old fields loses them the next time it is written, and the SSH port it held
+// gives way to the default web port.
+func migrate(cfg *Config) bool {
+	previous := cfg.SchemaVersion
+	if previous < CurrentSchemaVersion {
+		cfg.SmpPort = 0
 	}
 	cfg.SchemaVersion = CurrentSchemaVersion
-	return originalVersion < CurrentSchemaVersion
+	return previous < CurrentSchemaVersion
 }

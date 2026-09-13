@@ -1,6 +1,8 @@
 package smp
 
 import (
+	"context"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -9,66 +11,79 @@ import (
 	"streaming/internal/config"
 )
 
-// TestLiveSMP talks to a real unit and prints what each SSH channel type
-// produced for each query. It is skipped unless SMP_HOST is set.
+// TestLiveSMP talks to a real unit and prints what it reports. It is skipped
+// unless SMP_HOST is set.
 //
-// Every command it sends is a query. It never recalls a preset and never
-// enables or disables an encoder, so it is safe to run while a service is
-// being streamed.
+// Everything it does is a read: it never starts or stops a stream and never
+// touches an encoder, so it is safe to run while a service is being streamed.
 func TestLiveSMP(t *testing.T) {
 	cfg, ok := liveConfig(t)
 	if !ok {
 		t.Skip("set SMP_HOST, SMP_USER and SMP_PASSWORD_FILE to test against a real SMP")
 	}
+	client := New()
+	ctx := context.Background()
 
-	t.Run("channel ladder", func(t *testing.T) {
-		client, err := dialClient(cfg)
-		if err != nil {
-			t.Fatalf("could not sign in to %s: %v", smpAddress(cfg), err)
-		}
-		defer client.Close()
-		t.Logf("signed in to %s as %q", smpAddress(cfg), cfg.SmpUsername)
-
-		// A bare carriage return is included because it asks the SIS parser
-		// for nothing: whatever comes back is the unit announcing itself.
-		queries := []string{
-			"\r",
-			streamEnabledQuery(cfg.StreamIndex),
-			streamingPresetQueryCommand(cfg.StreamIndex),
-		}
-		for _, transport := range sisTransports {
-			for _, query := range queries {
-				probe := probeSIS(client, transport, query)
-				t.Logf(
-					"%-21s sent %-12s greeting=%-28q reply=%-28q err=%v",
-					transport, printable(query),
-					printable(probe.greeting), printable(probe.reply), probe.err,
-				)
+	t.Run("channels", func(t *testing.T) {
+		for _, channel := range []int{archiveChannel, confidenceChannel} {
+			values, err := client.read(ctx, cfg, streamEnableURI(channel), publishURI(channel))
+			if err != nil {
+				t.Fatalf("%s: %v", channelName(channel), err)
 			}
-		}
-	})
-
-	// Diagnose opens its own login, so it runs once the ladder above has hung
-	// up rather than competing with it for the unit's SIS session.
-	t.Run("diagnosis", func(t *testing.T) {
-		result := New().Diagnose(cfg)
-		t.Logf("ok=%t stage=%s", result.OK, result.Stage)
-		t.Logf("summary: %s", result.Summary)
-		t.Logf("detail:  %s", result.Detail)
-		t.Logf("hint:    %s", result.Hint)
-		if !result.OK {
-			t.Fail()
+			enabled, err := values.number(streamEnableURI(channel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := client.session(ctx, cfg, channel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			destination := current.destination
+			if destination == "" {
+				destination = "none"
+			}
+			t.Logf(
+				"%-10s encoder enabled=%d publishing=%t destination=%s",
+				channelName(channel), enabled, current.publishing, destination,
+			)
 		}
 	})
 
 	t.Run("state", func(t *testing.T) {
-		state, polled := New().QueryState(cfg)
+		state, polled := client.QueryState(cfg)
 		if !polled {
 			t.Fatal("another exchange was in flight")
 		}
 		t.Logf("%+v", state)
 		if state.LastError != nil {
 			t.Fatalf("state read failed: %s", *state.LastError)
+		}
+	})
+
+	t.Run("preview", func(t *testing.T) {
+		body, err := client.Preview(ctx, cfg)
+		if err != nil {
+			t.Fatalf("preview: %v", err)
+		}
+		defer body.Close()
+		// Enough to prove the unit is producing a fragmented MP4 rather than
+		// holding the connection open and sending nothing.
+		head := make([]byte, 64*1024)
+		read, err := io.ReadFull(body, head)
+		if err != nil {
+			t.Fatalf("read %d bytes of preview: %v", read, err)
+		}
+		t.Logf("preview delivered %d bytes starting with %q", read, head[4:12])
+	})
+
+	t.Run("diagnosis", func(t *testing.T) {
+		result := client.Diagnose(cfg)
+		t.Logf("ok=%t stage=%s", result.OK, result.Stage)
+		t.Logf("summary: %s", result.Summary)
+		t.Logf("detail:  %s", result.Detail)
+		t.Logf("hint:    %s", result.Hint)
+		if !result.OK {
+			t.Fail()
 		}
 	})
 }
@@ -91,17 +106,7 @@ func liveConfig(t *testing.T) (config.Config, bool) {
 		if err != nil {
 			t.Fatalf("SMP_PORT: %v", err)
 		}
-		cfg.SmpSSHPort = parsed
-	}
-	// SMP_STREAM aims the queries at one encoder: 1 is Archive and 3 is
-	// Confidence, which is the only way to read the second one, since the
-	// saved configuration always drives Archive.
-	if stream := strings.TrimSpace(os.Getenv("SMP_STREAM")); stream != "" {
-		parsed, err := strconv.Atoi(stream)
-		if err != nil {
-			t.Fatalf("SMP_STREAM: %v", err)
-		}
-		cfg.StreamIndex = parsed
+		cfg.SmpPort = parsed
 	}
 	cfg.SmpPassword = livePassword(t)
 	return cfg, true

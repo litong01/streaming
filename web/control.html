@@ -366,7 +366,7 @@
       mandarinButton.classList.toggle("active", data.activeStream === "mandarin");
       englishButton.disabled = busy || !reachable;
       mandarinButton.disabled = busy || !reachable;
-      stopButton.disabled = busy || !reachable || !data.streamEnabled;
+      stopButton.disabled = busy || !reachable || !data.streaming;
       updatePreview(data);
     }
 

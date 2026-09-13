@@ -133,19 +133,9 @@ func (s *Server) routes() http.Handler {
 	return mux
 }
 
-// previewClient deliberately has no overall timeout: the SMP's preview is an
-// endless fragmented MP4 whose body is relayed for as long as the browser
-// keeps watching.
-var previewClient = &http.Client{
-	Transport: &http.Transport{
-		ResponseHeaderTimeout: 5 * time.Second,
-	},
-}
-
 // handlePreview relays the SMP's own live preview to the browser. The unit
-// serves it as a fragmented MP4 over HTTP and keeps producing it whether or
-// not an encoder is streaming, so the picture does not depend on the
-// Confidence preset or on the unit's RTSP delivery, which sends no media.
+// serves it as a fragmented MP4 and keeps producing it whether or not anything
+// is being streamed, so the picture does not depend on which language is live.
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -156,30 +146,16 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "SMP is not configured", http.StatusServiceUnavailable)
 		return
 	}
-
-	// The cache-busting parameter is what the SMP's own preview page sends.
-	target := fmt.Sprintf("http://%s/mp4stream?d=%d", cfg.SmpHost, time.Now().UnixMilli())
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	body, err := s.client.Preview(r.Context(), cfg)
 	if err != nil {
 		http.Error(w, "preview unavailable", http.StatusBadGateway)
 		return
 	}
-	req.SetBasicAuth(cfg.SmpUsername, cfg.SmpPassword)
-
-	resp, err := previewClient.Do(req)
-	if err != nil {
-		http.Error(w, "preview unavailable", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "preview unavailable", http.StatusBadGateway)
-		return
-	}
+	defer body.Close()
 
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Cache-Control", "no-store")
-	copyStreaming(w, resp.Body)
+	copyStreaming(w, body)
 }
 
 // copyStreaming forwards the body a fragment at a time and flushes each one,
@@ -262,13 +238,11 @@ func (s *Server) handleConfigAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 type configPayload struct {
-	SmpHost        string `json:"smpHost"`
-	SmpSSHPort     int    `json:"smpSshPort"`
-	SmpUsername    string `json:"smpUsername"`
-	SmpPassword    string `json:"smpPassword"`
-	HTTPPort       int    `json:"httpPort"`
-	EnglishPreset  int    `json:"englishPreset"`
-	MandarinPreset int    `json:"mandarinPreset"`
+	SmpHost     string `json:"smpHost"`
+	SmpPort     int    `json:"smpPort"`
+	SmpUsername string `json:"smpUsername"`
+	SmpPassword string `json:"smpPassword"`
+	HTTPPort    int    `json:"httpPort"`
 }
 
 // handleConfigTest probes the SMP with the values currently in the form so a
@@ -284,13 +258,13 @@ func (s *Server) handleConfigTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.store.Get()
-	host, sshPort, err := config.ParseHostPort(payload.SmpHost, payload.SmpSSHPort)
+	host, port, err := config.ParseHostPort(payload.SmpHost, payload.SmpPort)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	cfg.SmpHost = host
-	cfg.SmpSSHPort = sshPort
+	cfg.SmpPort = port
 	if username := strings.TrimSpace(payload.SmpUsername); username != "" {
 		cfg.SmpUsername = username
 	}
@@ -321,13 +295,13 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	current := s.store.Get()
 	next := current
-	host, sshPort, err := config.ParseHostPort(payload.SmpHost, payload.SmpSSHPort)
+	host, port, err := config.ParseHostPort(payload.SmpHost, payload.SmpPort)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	next.SmpHost = host
-	next.SmpSSHPort = sshPort
+	next.SmpPort = port
 	next.SmpUsername = strings.TrimSpace(payload.SmpUsername)
 	if payload.SmpPassword != "" {
 		next.SmpPassword = payload.SmpPassword
@@ -336,9 +310,6 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	if next.HTTPPort == 0 {
 		next.HTTPPort = config.DefaultHTTPPort
 	}
-	next.StreamIndex = config.DefaultStreamIndex
-	next.EnglishPreset = payload.EnglishPreset
-	next.MandarinPreset = payload.MandarinPreset
 	if err := next.Validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

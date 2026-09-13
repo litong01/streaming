@@ -1,2 +1,2 @@
-# Keep JSch classes used for SSH control of the Extron SMP.
--keep class com.jcraft.jsch.** { *; }
+# The app is a launcher and a supervisor for the Go control server, which does
+# all of the talking to the SMP. Nothing here needs keeping by name.

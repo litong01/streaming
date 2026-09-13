@@ -143,34 +143,24 @@ class ServerBootstrap(context: Context) {
         return encoded
     }
 
+    /**
+     * Carries an older build's settings across. The streaming presets and the
+     * SIS port are deliberately left behind: the server presses the unit's own
+     * RTMP buttons over its web port now, so the only settings still worth
+     * anything are the address, the credentials, and the ports of this server.
+     */
     private fun legacyConfig(): String? {
         val legacy = credentialPrefs() ?: return null
         if (legacy.getBoolean(KEY_MIGRATION_COMPLETE, false)) return null
         val hasLegacyConfig = LEGACY_KEYS.any(legacy::contains)
         if (!hasLegacyConfig) return null
 
-        var englishPreset = legacy.getInt(KEY_ENGLISH_PRESET, DEFAULT_ENGLISH_PRESET)
-        var mandarinPreset = legacy.getInt(KEY_MANDARIN_PRESET, DEFAULT_MANDARIN_PRESET)
-        if (
-            legacy.getInt(KEY_CONFIG_VERSION, 1) < CURRENT_SCHEMA_VERSION &&
-            legacy.contains(KEY_ENGLISH_PRESET) &&
-            legacy.contains(KEY_MANDARIN_PRESET) &&
-            englishPreset == 1 &&
-            mandarinPreset == 2
-        ) {
-            englishPreset = DEFAULT_ENGLISH_PRESET
-            mandarinPreset = DEFAULT_MANDARIN_PRESET
-        }
         val config = JSONObject()
             .put("schemaVersion", CURRENT_SCHEMA_VERSION)
             .put("smpHost", legacy.getString(KEY_SMP_HOST, "") ?: "")
-            .put("smpSshPort", legacy.getInt(KEY_SMP_SSH_PORT, DEFAULT_SMP_SSH_PORT))
             .put("smpUsername", legacy.getString(KEY_SMP_USERNAME, "") ?: "")
             .put("smpPassword", legacy.getString(KEY_SMP_PASSWORD, "") ?: "")
             .put("httpPort", legacy.getInt(KEY_HTTP_PORT, DEFAULT_HTTP_PORT))
-            .put("streamIndex", 1)
-            .put("englishPreset", englishPreset)
-            .put("mandarinPreset", mandarinPreset)
             .put(
                 "pollIntervalSeconds",
                 legacy.getInt(KEY_POLL_INTERVAL_SECONDS, DEFAULT_POLL_INTERVAL_SECONDS),
@@ -198,10 +188,7 @@ class ServerBootstrap(context: Context) {
         private const val KEY_MANDARIN_PRESET = "mandarin_preset"
         private const val KEY_POLL_INTERVAL_SECONDS = "poll_interval_seconds"
 
-        private const val CURRENT_SCHEMA_VERSION = 2
-        private const val DEFAULT_SMP_SSH_PORT = 22023
-        private const val DEFAULT_ENGLISH_PRESET = 2
-        private const val DEFAULT_MANDARIN_PRESET = 1
+        private const val CURRENT_SCHEMA_VERSION = 4
         private const val DEFAULT_POLL_INTERVAL_SECONDS = 3
 
         private val LEGACY_KEYS = listOf(

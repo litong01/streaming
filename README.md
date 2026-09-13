@@ -1,8 +1,12 @@
 # Streaming
 
-Tablet-based control of Extron SMP 300 Series streaming presets. One Go control
-server is used everywhere: as a standalone executable on computers and as an
-ARM64 executable supervised by the Android app.
+Tablet-based control of Extron SMP 300 Series streaming. One Go control server
+is used everywhere: as a standalone executable on computers and as an ARM64
+executable supervised by the Android app.
+
+Start Mandarin and Start English press the unit's own **START RTMP STREAM**
+buttons, over the same web API its configuration page uses. Nothing here
+recalls a preset or edits a destination.
 
 ## Android behavior
 
@@ -10,16 +14,16 @@ ARM64 executable supervised by the Android app.
   configuration page inside the app.
 - The APK contains the Go control server. A small Kotlin foreground service
   starts it.
-- The configuration page collects the SMP address, SSH credentials, server
-  port, and preset numbers.
+- The configuration page collects the SMP address, its credentials, and the
+  server port. There is nothing else to set.
 - Credentials never leave the Android device.
 - Fully Kiosk Browser uses `http://127.0.0.1:8080/` for daily operation.
 - The server starts during boot, before anyone signs in, and again after an app
   update. Every fifteen minutes a background check restarts it if it stopped
   answering.
-- Preset 1 is Mandarin and preset 2 is English by default. Both must already
-  be configured through the native SMP web interface. The Confidence encoder
-  is never touched by this app.
+- The Archive encoder carries Mandarin and the Confidence encoder carries
+  English. Both destinations are configured on the SMP itself, through its own
+  web interface, and this app never changes them.
 
 The Android wrapper is Kotlin, but SMP commands, status polling, configuration
 APIs, and web serving are implemented only in Go. No Java or Android tooling is
@@ -34,7 +38,7 @@ preview above the round tiles, and Start English / Start Mandarin / Stop.
 The preview is the SMP's own `/mp4stream` endpoint, a fragmented MP4 the unit
 serves over HTTP and plays in its own web interface. `/api/preview` relays it
 with the stored credentials so the browser needs none. The unit produces it
-whether or not an encoder is streaming, so the camera is visible before anyone
+whether or not anything is streaming, so the camera is visible before anyone
 taps a language. This replaced an RTSP pull through go2rtc, which this unit
 accepts and then never sends media on: it reports 0 packets sent for every
 session, over both TCP and UDP.
@@ -58,9 +62,10 @@ create a release.
 1. Install and tap the Streaming icon.
 2. Grant notification permission so Android can show the server's persistent
    foreground-service notification.
-3. Enter the SMP address (`host` or `host:22023`), username, password,
-   and the local server port (default `8080`). The SSH port is `22023` unless
-   you include a different one after the colon.
+3. Enter the SMP address (`host` or `host:443`), username, password, and the
+   local server port (default `8080`). These are the same credentials as the
+   SMP's own web page. The port is `443` unless you include a different one
+   after the colon; `80` switches to plain HTTP.
 4. Save the configuration.
 5. Point Fully Kiosk Browser at `http://127.0.0.1:8080/`.
 
@@ -128,80 +133,76 @@ unlocked, which is the moment the APK is installed.
 
 ## SMP commands
 
-For stream 1 (Archive Ch A) and preset `P`:
+Everything goes through `/api/swis/resources` on the SMP's web port, the same
+API its own configuration page uses. A `GET` takes one `uri` parameter per
+resource wanted, and a `PUT` takes a list of resources and values:
 
-- Recall preset onto Archive: `3*1*P.`
-- Enable Archive: `E1*1STRC}`
-- Disable Archive: `E1*0STRC}`
-- Query stream enabled: `E1STRC}`
-- Query selected streaming preset: `46I`
+```
+GET /api/swis/resources?uri=/streamer/rtmp/1/pub_control
+PUT /api/swis/resources   [{"uri": "/streamer/rtmp/1/pub_control", "value": 1}]
+```
 
-In Extron's command-table notation, `E` is the escape byte (`0x1b`), `}` is
-a carriage return (`0x0d`), and `]` in a response is CR/LF. They are not
-literal characters. The Go client sends and reads those control bytes.
+Archive is channel 1 and Confidence is channel 3. Four resources matter:
 
-Only the Archive encoder is ever touched. The Confidence encoder belongs to
-whoever configured the unit, and the app neither reads nor changes it.
+- `/streamer/rtmp/N/pub_control` is the RTMP push itself, and what the unit's
+  START and STOP RTMP STREAM buttons write.
+- `/encoder/N/stream_enable` is the encoder behind it.
+- `/streamer/rtmp/N` reports `session_info`, whose `resolved_ip` names the
+  address a live push has actually connected to.
+- `/mp4stream` is the live preview.
 
-Starting a language reads the Archive encoder first and leaves it alone if it
-already runs the preset being asked for, because recalling a preset means
-switching the encoder off first and re-tapping the live language must not
-interrupt the push. So tapping the language already live sends two commands
-and changes nothing, while a switch sends five.
+Authentication is HTTP Basic with the unit's own web credentials. The
+certificate is self-signed by Extron, so it is not verified; the alternative is
+plain HTTP to the same unit over the same wire.
 
-An encoder that does need changing is switched off, given its preset, and
-switched back on. Three seconds later it is read back: the SMP reports an
-encoder as enabled the moment it is switched on, which is before the
-destination has been contacted, so a push that is refused would otherwise be
-announced as a live stream.
+Two details of the unit's behavior shape the code:
 
-Deciding what to skip relies on the unit reporting `0*modified, not saved`
-whenever a live configuration has drifted from its saved preset. Switching an
-encoder off is itself enough to cause that, so anything uncertain falls through
-to a full recall.
+**A publish is refused unless the encoder is already running.** `pub_control =
+1` on a stopped encoder answers `E13 Invalid value`, so a start writes
+`stream_enable = 1` first. That write is harmless when the encoder is already
+running, which it normally is.
 
-Stop disables the Archive encoder and nothing else. All commands from one
-button press share one SSH login to avoid exhausting the SMP's connection
-limit.
+**Errors arrive as HTTP 200.** A refused command comes back with an Extron code
+in `meta.status` beside the resource it refused, so the body is what says
+whether a call worked, not the status code.
 
-## When the SMP signs in but answers nothing
+Starting a language reads both channels before writing anything. The other
+language is stopped only if it is actually publishing, and a language that is
+already live is left completely alone rather than being interrupted and
+restarted. The start is then confirmed by waiting for `resolved_ip` to name a
+real address: the publish flag is set the moment the command is accepted, which
+is before the destination has been contacted, so a push that is going to be
+refused would otherwise be announced as a live stream.
 
-SSH login succeeding tells you the network, the port, and the credentials are
-right. It does not mean the SMP has attached its SIS session to that login, and
-the two failures look identical from outside: the unit accepts the channel and
-then stays silent.
+Stop clears `pub_control` on whichever channel is publishing and leaves the
+encoders themselves running. Switching an encoder off is what makes the unit
+report its configuration as `modified, not saved`, which its own page renders
+as a blank selection with half the streaming section greyed out.
 
-Firmware disagrees about which SSH channel carries the SIS session, so the
-server tries a plain shell, a shell with a terminal requested, and an exec
-channel, and keeps whichever one answered for later logins. Both output streams
-are read, because some firmware puts its copyright banner on standard error,
-where a reader watching only standard output cannot tell it from silence.
+## Checking the connection
 
-**Test connection** on the configuration page reports which layer stopped the
-exchange, and for the SIS layer it distinguishes:
+**Test connection** on the configuration page checks both things the control
+page needs, the API that starts a stream and the preview that shows the
+picture, and names the layer that failed: the address, the network, the
+credentials, the API, or the preview. A failure on the preview alone still
+leaves the buttons working.
 
-- No reply on any channel type, not even the copyright banner. The SIS session
-  is not attaching to the login. Check that the account has SIS/Telnet rights
-  rather than web-only access, and that no other SSH session, Toolbelt window,
-  or second copy of this app holds the unit's SIS connection.
-- The banner arrives and plain commands such as `46I` answer, but the
-  escape-prefixed ones do not. The SMP is listening and the escape byte is
-  being lost on the way in.
-- Something came back that is not the expected response. The command format
-  needs correcting, and the test shows the exact bytes sent and received.
+`scripts/smp-api.sh` does the same from a computer, and can start and stop the
+streams too:
 
-`scripts/smp-sis.sh` reproduces all of this from a computer. Set `SMP_TTY=1` to
-request a terminal, which is what the second channel type above does.
+```bash
+SMP_HOST=192.168.1.10 SMP_PASSWORD_FILE=~/.smp-password ./scripts/smp-api.sh status
+```
 
-From a computer on the same network, `TestLiveSMP` prints the whole ladder
-against the real unit. It is skipped unless `SMP_HOST` is set, and it sends
-only queries, so it is safe to run during a service:
+`TestLiveSMP` prints what the real unit reports. It is skipped unless
+`SMP_HOST` is set, and every call it makes is a read, so it is safe to run
+during a service:
 
 ```bash
 SMP_HOST=192.168.1.10 SMP_USER=admin SMP_PASSWORD_FILE=~/.smp-password \
   go test -run TestLiveSMP ./internal/smp/ -v
 ```
 
-Because the unit answers one session at a time, every exchange takes turns: a
-status poll is skipped rather than queued while a button press or a connection
-test is in flight.
+A status poll is skipped rather than queued while a button press or a
+connection test is in flight, so what the page shows is never a reading from
+the middle of a language switch.
