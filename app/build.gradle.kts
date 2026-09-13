@@ -39,8 +39,13 @@ android {
                 storeFile = sharedKeystore
                 storeType = "PKCS12"
                 storePassword = sharedKeystorePassword
+                // An unset repository secret still reaches the build as an
+                // empty variable rather than an absent one, so a blank value
+                // has to fall through to the default alias as well.
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                    ?.takeIf(String::isNotBlank)
+                    ?: "streaming"
                 // A PKCS12 keystore protects its key with the store password.
-                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "streaming"
                 keyPassword = sharedKeystorePassword
             }
         }

@@ -79,6 +79,7 @@ jobs:
       - name: Decode the signing keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
             echo "::warning::No ANDROID_KEYSTORE_BASE64 secret is set, so this APK gets a throwaway key and will not install over an existing copy."
@@ -86,6 +87,16 @@ jobs:
           fi
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.p12
           echo "Decoded $(wc -c < release.p12) bytes of keystore."
+          # Naming the keys it holds turns a wrong password or an unexpected
+          # alias into a failure here, with an explanation, rather than into a
+          # bare signing error several minutes later.
+          if ! keytool -list -keystore release.p12 -storetype PKCS12 \
+              -storepass "$ANDROID_KEYSTORE_PASSWORD" > keystore-listing.txt 2>&1; then
+            echo "::error::Could not open the keystore. Check that ANDROID_KEYSTORE_PASSWORD matches the password used to export it."
+            exit 1
+          fi
+          awk -F, '/PrivateKeyEntry/ { print "signing key alias: " $1 }' keystore-listing.txt
+          rm -f keystore-listing.txt
 
       - name: Build installable debug APK
         env:
