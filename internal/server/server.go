@@ -127,6 +127,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/config", s.handleConfigAPI)
 	mux.HandleFunc("/api/config/test", s.handleConfigTest)
 	mux.HandleFunc("/api/preview", s.handlePreview)
+	mux.HandleFunc("/api/audio", s.handleAudio)
+	mux.HandleFunc("/api/audio/gain", s.handleAudioGain)
+	mux.HandleFunc("/api/audio/mute", s.handleAudioMute)
 	mux.HandleFunc("/api/stream/english", s.handleEnglish)
 	mux.HandleFunc("/api/stream/mandarin", s.handleMandarin)
 	mux.HandleFunc("/api/stream/stop", s.handleStop)
@@ -196,6 +199,84 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.statusPayload(s.getState()))
+}
+
+func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	state, polled, err := s.client.QueryAudio(s.store.Get())
+	if !polled {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+type audioGainPayload struct {
+	GainTenths int `json:"gainTenths"`
+}
+
+func (s *Server) handleAudioGain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload audioGainPayload
+	if err := readJSON(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if payload.GainTenths < -180 || payload.GainTenths > 240 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "gain must be between -18.0 and +24.0 dB",
+		})
+		return
+	}
+	if err := s.client.SetAudioGain(s.store.Get(), payload.GainTenths); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeAudioState(w)
+}
+
+type audioMutePayload struct {
+	Muted bool `json:"muted"`
+}
+
+func (s *Server) handleAudioMute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload audioMutePayload
+	if err := readJSON(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.client.SetAudioMute(s.store.Get(), payload.Muted); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeAudioState(w)
+}
+
+func (s *Server) writeAudioState(w http.ResponseWriter) {
+	state, polled, err := s.client.QueryAudio(s.store.Get())
+	if !polled {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (s *Server) handleEnglish(w http.ResponseWriter, r *http.Request) {
@@ -277,14 +358,21 @@ func (s *Server) handleConfigTest(w http.ResponseWriter, r *http.Request) {
 
 func readConfigPayload(r *http.Request) (configPayload, error) {
 	var payload configPayload
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		return payload, fmt.Errorf("invalid body")
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return payload, fmt.Errorf("invalid JSON")
+	if err := readJSON(r, &payload); err != nil {
+		return payload, err
 	}
 	return payload, nil
+}
+
+func readJSON(r *http.Request, into any) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("invalid body")
+	}
+	if err := json.Unmarshal(body, into); err != nil {
+		return fmt.Errorf("invalid JSON")
+	}
+	return nil
 }
 
 func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {

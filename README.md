@@ -142,7 +142,7 @@ GET /api/swis/resources?uri=/streamer/rtmp/1/pub_control
 PUT /api/swis/resources   [{"uri": "/streamer/rtmp/1/pub_control", "value": 1}]
 ```
 
-Archive is channel 1 and Confidence is channel 3. Four resources matter:
+Archive is channel 1 and Confidence is channel 3. These resources matter:
 
 - `/streamer/rtmp/N/pub_control` is the RTMP push itself, and what the unit's
   START and STOP RTMP STREAM buttons write.
@@ -150,6 +150,11 @@ Archive is channel 1 and Confidence is channel 3. Four resources matter:
 - `/streamer/rtmp/N` reports `session_info`, whose `resolved_ip` names the
   address a live push has actually connected to.
 - `/mp4stream` is the live preview.
+- `/audio/dsp/oid/40002/g` and `/audio/dsp/oid/40003/g` are the left and right
+  gain of the audio embedded in HDMI input 2, in tenths of a decibel from
+  `-180` to `240`. Their `/m` siblings are the matching mutes, and
+  `/audio/dsp/multiple_oid/{g,m,v}?oids=40002,40003` reads gain, mute, and the
+  live meter in one go.
 
 Authentication is HTTP Basic with the unit's own web credentials. The
 certificate is self-signed by Extron, so it is not verified; the alternative is
@@ -178,6 +183,19 @@ Stop clears `pub_control` on whichever channel is publishing and leaves the
 encoders themselves running. Switching an encoder off is what makes the unit
 report its configuration as `modified, not saved`, which its own page renders
 as a blank selection with half the streaming section greyed out.
+
+## Stream volume
+
+The panel beside the preview adjusts what the stream sounds like, not what the
+tablet plays. Both encoders take Channel A, and Channel A is the audio embedded
+in HDMI input 2, so one control serves English and Mandarin alike.
+
+It mirrors the unit's own Audio page: a fader and a level meter per side, a
+mute, and buttons that step a decibel at a time. The two faders are ganged,
+because the gain is one volume rather than a balance to set. The meters are the
+unit's live readings rather than the fader positions, so a loud room shows up
+without anyone touching the control, and the warning above them lights when
+either side reaches -3 dB.
 
 ## Checking the connection
 

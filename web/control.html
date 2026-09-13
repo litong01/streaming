@@ -118,6 +118,164 @@
       object-fit: cover;
     }
 
+    .preview-row {
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      gap: 18px;
+    }
+
+    .audio-panel {
+      width: 220px;
+      min-height: 236px;
+      padding: 12px 14px;
+      border: 1px solid var(--ring);
+      border-radius: 18px;
+      background: rgba(20, 20, 22, 0.94);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+    }
+
+    .audio-title {
+      margin-bottom: 8px;
+      color: var(--text-dim);
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .clip-warning {
+      min-height: 24px;
+      margin-bottom: 6px;
+      padding: 4px 8px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      color: transparent;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+
+    .clip-warning.active {
+      border-color: #ff8a80;
+      background: #b3261e;
+      color: #fff;
+      box-shadow: 0 0 12px rgba(242, 139, 130, 0.5);
+    }
+
+    .audio-channels {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+    }
+
+    .audio-channel {
+      display: grid;
+      grid-template-columns: 34px 12px;
+      grid-template-rows: auto 122px auto;
+      gap: 4px 6px;
+      justify-content: center;
+    }
+
+    .channel-label {
+      grid-column: 1 / 3;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+
+    .fader-slot {
+      position: relative;
+      width: 34px;
+      height: 122px;
+    }
+
+    .gain-fader {
+      position: absolute;
+      top: 51px;
+      left: -44px;
+      width: 122px;
+      accent-color: var(--accent);
+      transform: rotate(-90deg);
+      cursor: pointer;
+    }
+
+    .meter {
+      position: relative;
+      width: 12px;
+      height: 122px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 3px;
+      background: #080909;
+    }
+
+    .meter-fill {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      height: 0;
+      background: linear-gradient(to top, #34a853 0 72%, #fbbc04 72% 96%, #ea4335 96%);
+      transition: height 100ms linear;
+    }
+
+    .meter-clip {
+      position: absolute;
+      top: 0;
+      right: 0;
+      left: 0;
+      height: 5px;
+      background: #53120e;
+      transition: background 100ms linear, box-shadow 100ms linear;
+    }
+
+    .meter-clip.active {
+      background: #ff3b30;
+      box-shadow: 0 0 8px #ff3b30;
+    }
+
+    .gain-value {
+      grid-column: 1 / 3;
+      font-variant-numeric: tabular-nums;
+      font-size: 0.72rem;
+      color: var(--text-dim);
+    }
+
+    .audio-buttons {
+      display: grid;
+      grid-template-columns: 42px 1fr 42px;
+      gap: 7px;
+      margin-top: 9px;
+    }
+
+    .audio-button {
+      min-height: 34px;
+      border: 1px solid var(--ring-hover);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.86rem;
+      cursor: pointer;
+    }
+
+    .audio-button:active { transform: scale(0.96); }
+
+    .audio-button.muted {
+      border-color: rgba(242, 139, 130, 0.65);
+      background: rgba(242, 139, 130, 0.18);
+      color: var(--warn);
+    }
+
+    .audio-panel.unavailable {
+      opacity: 0.42;
+    }
+
+    .audio-panel.unavailable .audio-button,
+    .audio-panel.unavailable .gain-fader {
+      cursor: not-allowed;
+    }
+
     #grid {
       display: grid;
       grid-template-columns: repeat(3, var(--tile));
@@ -287,6 +445,30 @@
         --icon-inset: 14px;
         --label-size: 0.95rem;
       }
+
+      .preview-row {
+        align-items: center;
+        flex-direction: column;
+      }
+
+      .audio-panel {
+        width: min(420px, 92vw);
+      }
+
+      .audio-channel {
+        grid-template-rows: auto 82px auto;
+      }
+
+      .fader-slot,
+      .meter {
+        height: 82px;
+      }
+
+      .gain-fader {
+        top: 31px;
+        left: -24px;
+        width: 82px;
+      }
     }
   </style>
 </head>
@@ -297,8 +479,48 @@
   </div>
 
   <main id="stage">
-    <div id="preview" class="preview" hidden>
-      <video id="previewVideo" title="Live camera preview" autoplay muted playsinline></video>
+    <div class="preview-row">
+      <div id="preview" class="preview" hidden>
+        <video id="previewVideo" title="Live camera preview" autoplay muted playsinline></video>
+      </div>
+
+      <section id="audioPanel" class="audio-panel unavailable" aria-label="Stream audio">
+        <div class="audio-title">Stream Audio · HDMI 2</div>
+        <div id="clipWarning" class="clip-warning" role="status">LEVEL TOO HIGH</div>
+        <div class="audio-channels">
+          <div class="audio-channel">
+            <label class="channel-label" for="leftGain">Left</label>
+            <div class="fader-slot">
+              <input id="leftGain" class="gain-fader" type="range"
+                     min="-180" max="240" step="1" disabled aria-label="Left gain">
+            </div>
+            <div class="meter" aria-label="Left audio level">
+              <div id="leftMeter" class="meter-fill"></div>
+              <div id="leftClip" class="meter-clip"></div>
+            </div>
+            <output id="leftGainValue" class="gain-value" for="leftGain">-- dB</output>
+          </div>
+          <div class="audio-channel">
+            <label class="channel-label" for="rightGain">Right</label>
+            <div class="fader-slot">
+              <input id="rightGain" class="gain-fader" type="range"
+                     min="-180" max="240" step="1" disabled aria-label="Right gain">
+            </div>
+            <div class="meter" aria-label="Right audio level">
+              <div id="rightMeter" class="meter-fill"></div>
+              <div id="rightClip" class="meter-clip"></div>
+            </div>
+            <output id="rightGainValue" class="gain-value" for="rightGain">-- dB</output>
+          </div>
+        </div>
+        <div class="audio-buttons">
+          <button id="gainDown" class="audio-button" type="button" disabled
+                  aria-label="Lower stream audio one decibel">−</button>
+          <button id="audioMute" class="audio-button" type="button" disabled>Mute</button>
+          <button id="gainUp" class="audio-button" type="button" disabled
+                  aria-label="Raise stream audio one decibel">+</button>
+        </div>
+      </section>
     </div>
 
     <div id="grid" role="group" aria-label="Streaming controls">
@@ -355,8 +577,26 @@
     const stopButton = document.getElementById("stop");
     const preview = document.getElementById("preview");
     const previewVideo = document.getElementById("previewVideo");
+    const audioPanel = document.getElementById("audioPanel");
+    const clipWarning = document.getElementById("clipWarning");
+    const leftGain = document.getElementById("leftGain");
+    const rightGain = document.getElementById("rightGain");
+    const leftGainValue = document.getElementById("leftGainValue");
+    const rightGainValue = document.getElementById("rightGainValue");
+    const leftMeter = document.getElementById("leftMeter");
+    const rightMeter = document.getElementById("rightMeter");
+    const leftClip = document.getElementById("leftClip");
+    const rightClip = document.getElementById("rightClip");
+    const gainDown = document.getElementById("gainDown");
+    const gainUp = document.getElementById("gainUp");
+    const audioMute = document.getElementById("audioMute");
     let busy = false;
     let previewPlaying = false;
+    let audioBusy = false;
+    let audioEditing = false;
+    let audioAvailable = false;
+    let currentGainTenths = 0;
+    let currentMuted = false;
 
     function pad(value) {
       return value < 10 ? "0" + value : String(value);
@@ -431,6 +671,132 @@
       }, 3000);
     }
 
+    function formatDB(tenths) {
+      const value = tenths / 10;
+      return (value > 0 ? "+" : "") + value.toFixed(1) + " dB";
+    }
+
+    function meterPercent(tenths) {
+      // The SMP meter bottoms out around -90 dB and clips at 0 dB.
+      return Math.max(0, Math.min(100, ((tenths + 900) / 900) * 100));
+    }
+
+    function enableAudioControls(enabled) {
+      const usable = enabled && !audioBusy;
+      leftGain.disabled = !usable;
+      rightGain.disabled = !usable;
+      gainDown.disabled = !usable;
+      gainUp.disabled = !usable;
+      audioMute.disabled = !usable;
+    }
+
+    function applyAudioState(data) {
+      audioAvailable = true;
+      audioPanel.classList.remove("unavailable");
+      currentGainTenths = Math.round(
+        (Number(data.leftGainTenths) + Number(data.rightGainTenths)) / 2
+      );
+      currentMuted = Boolean(data.muted);
+
+      if (!audioEditing) {
+        leftGain.value = data.leftGainTenths;
+        rightGain.value = data.rightGainTenths;
+        leftGainValue.textContent = formatDB(data.leftGainTenths);
+        rightGainValue.textContent = formatDB(data.rightGainTenths);
+      }
+
+      const leftLevel = Number(data.leftLevelTenths);
+      const rightLevel = Number(data.rightLevelTenths);
+      leftMeter.style.height = meterPercent(leftLevel) + "%";
+      rightMeter.style.height = meterPercent(rightLevel) + "%";
+      leftClip.classList.toggle("active", leftLevel >= -30);
+      rightClip.classList.toggle("active", rightLevel >= -30);
+      clipWarning.classList.toggle("active", Boolean(data.clipping));
+
+      audioMute.textContent = currentMuted ? "Unmute" : "Mute";
+      audioMute.classList.toggle("muted", currentMuted);
+      audioMute.setAttribute("aria-pressed", String(currentMuted));
+      enableAudioControls(true);
+    }
+
+    function showAudioUnavailable() {
+      audioAvailable = false;
+      audioPanel.classList.add("unavailable");
+      enableAudioControls(false);
+      leftMeter.style.height = "0";
+      rightMeter.style.height = "0";
+      leftClip.classList.remove("active");
+      rightClip.classList.remove("active");
+      clipWarning.classList.remove("active");
+    }
+
+    async function refreshAudio() {
+      if (audioBusy || audioEditing) return;
+      try {
+        const response = await fetch("/api/audio", { cache: "no-store" });
+        if (response.status === 204) return;
+        applyAudioState(await readJson(response));
+      } catch (error) {
+        showAudioUnavailable();
+      }
+    }
+
+    function previewGangedGain(value) {
+      const gain = Math.max(-180, Math.min(240, Math.round(Number(value))));
+      leftGain.value = gain;
+      rightGain.value = gain;
+      leftGainValue.textContent = formatDB(gain);
+      rightGainValue.textContent = formatDB(gain);
+      currentGainTenths = gain;
+      return gain;
+    }
+
+    async function setAudioGain(gainTenths) {
+      if (!audioAvailable || audioBusy) return;
+      const gain = previewGangedGain(gainTenths);
+      audioBusy = true;
+      enableAudioControls(false);
+      try {
+        const response = await fetch("/api/audio/gain", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gainTenths: gain })
+        });
+        if (response.status !== 204) {
+          applyAudioState(await readJson(response));
+        }
+      } catch (error) {
+        statusError.textContent = "Audio adjustment failed: " + error;
+      } finally {
+        audioBusy = false;
+        audioEditing = false;
+        enableAudioControls(audioAvailable);
+        await refreshAudio();
+      }
+    }
+
+    async function setAudioMute(muted) {
+      if (!audioAvailable || audioBusy) return;
+      audioBusy = true;
+      enableAudioControls(false);
+      try {
+        const response = await fetch("/api/audio/mute", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ muted: muted })
+        });
+        if (response.status !== 204) {
+          applyAudioState(await readJson(response));
+        }
+      } catch (error) {
+        statusError.textContent = "Audio mute failed: " + error;
+      } finally {
+        audioBusy = false;
+        enableAudioControls(audioAvailable);
+        await refreshAudio();
+      }
+    }
+
     previewVideo.addEventListener("error", restartPreview);
     previewVideo.addEventListener("ended", restartPreview);
 
@@ -443,6 +809,7 @@
       englishButton.disabled = true;
       mandarinButton.disabled = true;
       stopButton.disabled = true;
+      showAudioUnavailable();
       updatePreview({});
     }
 
@@ -485,11 +852,25 @@
     englishButton.addEventListener("click", () => postAction("/api/stream/english"));
     mandarinButton.addEventListener("click", () => postAction("/api/stream/mandarin"));
     stopButton.addEventListener("click", () => postAction("/api/stream/stop"));
+    [leftGain, rightGain].forEach(function (fader) {
+      fader.addEventListener("input", function () {
+        audioEditing = true;
+        previewGangedGain(fader.value);
+      });
+      fader.addEventListener("change", function () {
+        setAudioGain(fader.value);
+      });
+    });
+    gainDown.addEventListener("click", () => setAudioGain(currentGainTenths - 10));
+    gainUp.addEventListener("click", () => setAudioGain(currentGainTenths + 10));
+    audioMute.addEventListener("click", () => setAudioMute(!currentMuted));
 
     updateClock();
     setInterval(updateClock, 10000);
     refreshStatus();
     setInterval(refreshStatus, 3000);
+    refreshAudio();
+    setInterval(refreshAudio, 500);
   </script>
 </body>
 </html>

@@ -360,6 +360,72 @@ func TestActionsRefuseAnUnconfiguredSMP(t *testing.T) {
 	}
 }
 
+func TestQueryAudioReadsHDMI2DigitalStereo(t *testing.T) {
+	fake := newFakeSMP(t)
+	fake.audioGain[hdmi2DigitalLeftOID] = 110
+	fake.audioGain[hdmi2DigitalRightOID] = 110
+	fake.audioLevel[hdmi2DigitalLeftOID] = -31
+	fake.audioLevel[hdmi2DigitalRightOID] = -29
+
+	state, polled, err := New().QueryAudio(fake.config(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !polled {
+		t.Fatal("audio poll was skipped")
+	}
+	if state.LeftGainTenths != 110 || state.RightGainTenths != 110 {
+		t.Fatalf("unexpected gain: %+v", state)
+	}
+	if state.LeftLevelTenths != -31 || state.RightLevelTenths != -29 || !state.Clipping {
+		t.Fatalf("unexpected meters: %+v", state)
+	}
+}
+
+func TestSetAudioGainGangsLeftAndRight(t *testing.T) {
+	fake := newFakeSMP(t)
+
+	if err := New().SetAudioGain(fake.config(t), 70); err != nil {
+		t.Fatal(err)
+	}
+	if fake.audioGain[hdmi2DigitalLeftOID] != 70 ||
+		fake.audioGain[hdmi2DigitalRightOID] != 70 {
+		t.Fatalf("gain was not ganged: %+v", fake.audioGain)
+	}
+	want := []string{
+		audioOIDURI(hdmi2DigitalLeftOID, "g"),
+		audioOIDURI(hdmi2DigitalRightOID, "g"),
+	}
+	if got := fake.writtenURIs(); !slices.Equal(got, want) {
+		t.Fatalf("wrote %v, want %v", got, want)
+	}
+}
+
+func TestSetAudioGainRejectsValuesOutsideTheSMPRange(t *testing.T) {
+	fake := newFakeSMP(t)
+	client := New()
+	for _, gain := range []int{-181, 241} {
+		if err := client.SetAudioGain(fake.config(t), gain); err == nil {
+			t.Fatalf("accepted gain %d", gain)
+		}
+	}
+	if got := fake.writtenURIs(); len(got) != 0 {
+		t.Fatalf("wrote %v for invalid gain", got)
+	}
+}
+
+func TestSetAudioMuteGangsLeftAndRight(t *testing.T) {
+	fake := newFakeSMP(t)
+
+	if err := New().SetAudioMute(fake.config(t), true); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.audioMute[hdmi2DigitalLeftOID] ||
+		!fake.audioMute[hdmi2DigitalRightOID] {
+		t.Fatalf("mute was not ganged: %+v", fake.audioMute)
+	}
+}
+
 func TestPreviewCarriesTheUnitsStream(t *testing.T) {
 	fake := newFakeSMP(t)
 
@@ -522,6 +588,9 @@ type fakeSMP struct {
 	writes        []writtenResource
 	requests      int
 	previewBroken bool
+	audioGain     map[int]int
+	audioMute     map[int]bool
+	audioLevel    map[int]int
 }
 
 type writtenResource struct {
@@ -538,6 +607,15 @@ func newFakeSMP(t *testing.T) *fakeSMP {
 		dropOnRead:    map[int]bool{},
 		refusals:      map[string]string{},
 		rtmpReadCount: map[int]int{},
+		audioGain: map[int]int{
+			hdmi2DigitalLeftOID:  110,
+			hdmi2DigitalRightOID: 110,
+		},
+		audioMute: map[int]bool{},
+		audioLevel: map[int]int{
+			hdmi2DigitalLeftOID:  -900,
+			hdmi2DigitalRightOID: -900,
+		},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(resourcePath, fake.handleResources)
@@ -644,7 +722,26 @@ func (f *fakeSMP) readLocked(uri string) string {
 			return resultEntry(uri, f.rtmpLocked(channel))
 		}
 	}
+	switch uri {
+	case audioGainURI():
+		return resultEntry(uri, f.audioPairLocked(f.audioGain))
+	case audioMuteURI():
+		values := map[int]int{}
+		for oid, muted := range f.audioMute {
+			values[oid] = boolValue(muted)
+		}
+		return resultEntry(uri, f.audioPairLocked(values))
+	case audioLevelURI():
+		return resultEntry(uri, f.audioPairLocked(f.audioLevel))
+	}
 	return refusalEntry(uri, "E10")
+}
+
+func (f *fakeSMP) audioPairLocked(values map[int]int) map[string]int {
+	return map[string]int{
+		strconv.Itoa(hdmi2DigitalLeftOID):  values[hdmi2DigitalLeftOID],
+		strconv.Itoa(hdmi2DigitalRightOID): values[hdmi2DigitalRightOID],
+	}
 }
 
 // rtmpLocked answers as the unit does: the session row only names a
@@ -692,6 +789,16 @@ func (f *fakeSMP) writeLocked(uri string, raw json.RawMessage) string {
 			}
 			f.publishing[channel] = value == 1
 			f.rtmpReadCount[channel] = 0
+			return resultEntry(uri, value)
+		}
+	}
+	for _, oid := range []int{hdmi2DigitalLeftOID, hdmi2DigitalRightOID} {
+		switch uri {
+		case audioOIDURI(oid, "g"):
+			f.audioGain[oid] = value
+			return resultEntry(uri, value)
+		case audioOIDURI(oid, "m"):
+			f.audioMute[oid] = value == 1
 			return resultEntry(uri, value)
 		}
 	}

@@ -69,6 +69,27 @@ type State struct {
 	QueriedAtEpochMs int64        `json:"queriedAtEpochMs"`
 }
 
+// AudioState is the stereo digital audio embedded in Channel A HDMI input 2.
+// Both encoders use Channel A, so this is the gain heard by either language.
+// The SMP represents gain and meter readings in tenths of a decibel.
+type AudioState struct {
+	LeftGainTenths   int   `json:"leftGainTenths"`
+	RightGainTenths  int   `json:"rightGainTenths"`
+	LeftLevelTenths  int   `json:"leftLevelTenths"`
+	RightLevelTenths int   `json:"rightLevelTenths"`
+	Muted            bool  `json:"muted"`
+	Clipping         bool  `json:"clipping"`
+	QueriedAtEpochMs int64 `json:"queriedAtEpochMs"`
+}
+
+const (
+	hdmi2DigitalLeftOID  = 40002
+	hdmi2DigitalRightOID = 40003
+	minAudioGainTenths   = -180
+	maxAudioGainTenths   = 240
+	clipLevelTenths      = -30
+)
+
 type Client struct {
 	// One button press at a time. A start reads both encoders, may switch one
 	// off, and then waits for the other to connect; a poll arriving in the
@@ -115,6 +136,87 @@ func (c *Client) QueryState(cfg config.Config) (State, bool) {
 		return failed("SMP is not reachable", err), true
 	}
 	return stateFrom(live), true
+}
+
+// QueryAudio reads the ganged gain, mute state, and instantaneous stereo
+// meters. It steps aside while another SMP operation is in flight so frequent
+// meter polls cannot queue behind a stream start.
+func (c *Client) QueryAudio(cfg config.Config) (AudioState, bool, error) {
+	if !cfg.IsSmpConfigured() {
+		return AudioState{}, true, errors.New("SMP is not configured")
+	}
+	if !c.mu.TryLock() {
+		return AudioState{}, false, nil
+	}
+	defer c.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	values, err := c.read(ctx, cfg, audioGainURI(), audioMuteURI(), audioLevelURI())
+	if err != nil {
+		return AudioState{}, true, err
+	}
+
+	gains, err := audioPair(values, audioGainURI())
+	if err != nil {
+		return AudioState{}, true, err
+	}
+	mutes, err := audioPair(values, audioMuteURI())
+	if err != nil {
+		return AudioState{}, true, err
+	}
+	levels, err := audioPair(values, audioLevelURI())
+	if err != nil {
+		return AudioState{}, true, err
+	}
+	return AudioState{
+		LeftGainTenths:   gains.left,
+		RightGainTenths:  gains.right,
+		LeftLevelTenths:  levels.left,
+		RightLevelTenths: levels.right,
+		Muted:            mutes.left != 0 || mutes.right != 0,
+		Clipping:         levels.left >= clipLevelTenths || levels.right >= clipLevelTenths,
+		QueriedAtEpochMs: time.Now().UnixMilli(),
+	}, true, nil
+}
+
+// SetAudioGain gangs HDMI 2's left and right gain controls.
+func (c *Client) SetAudioGain(cfg config.Config, gainTenths int) error {
+	if !cfg.IsSmpConfigured() {
+		return errors.New("SMP is not configured")
+	}
+	if gainTenths < minAudioGainTenths || gainTenths > maxAudioGainTenths {
+		return fmt.Errorf("gain must be between -18.0 and +24.0 dB")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	return c.writeMany(ctx, cfg, []resourceUpdate{
+		{URI: audioOIDURI(hdmi2DigitalLeftOID, "g"), Value: gainTenths},
+		{URI: audioOIDURI(hdmi2DigitalRightOID, "g"), Value: gainTenths},
+	})
+}
+
+// SetAudioMute gangs HDMI 2's left and right mute controls.
+func (c *Client) SetAudioMute(cfg config.Config, muted bool) error {
+	if !cfg.IsSmpConfigured() {
+		return errors.New("SMP is not configured")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	value := 0
+	if muted {
+		value = 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	return c.writeMany(ctx, cfg, []resourceUpdate{
+		{URI: audioOIDURI(hdmi2DigitalLeftOID, "m"), Value: value},
+		{URI: audioOIDURI(hdmi2DigitalRightOID, "m"), Value: value},
+	})
 }
 
 func (c *Client) StartEnglish(cfg config.Config) State {
@@ -490,6 +592,11 @@ func reachablePort(host string) (int, bool) {
 // per resource wanted; a PUT takes a list of resources and their new values.
 const resourcePath = "/api/swis/resources"
 
+type resourceUpdate struct {
+	URI   string `json:"uri"`
+	Value any    `json:"value"`
+}
+
 func (c *Client) read(ctx context.Context, cfg config.Config, uris ...string) (resources, error) {
 	query := make(url.Values, 1)
 	for _, uri := range uris {
@@ -503,7 +610,11 @@ func (c *Client) read(ctx context.Context, cfg config.Config, uris ...string) (r
 }
 
 func (c *Client) write(ctx context.Context, cfg config.Config, uri string, value any) error {
-	body, err := json.Marshal([]map[string]any{{"uri": uri, "value": value}})
+	return c.writeMany(ctx, cfg, []resourceUpdate{{URI: uri, Value: value}})
+}
+
+func (c *Client) writeMany(ctx context.Context, cfg config.Config, updates []resourceUpdate) error {
+	body, err := json.Marshal(updates)
 	if err != nil {
 		return err
 	}
@@ -596,6 +707,24 @@ func (r resources) decode(uri string, into any) error {
 		return fmt.Errorf("could not read %s from the SMP's answer", uri)
 	}
 	return nil
+}
+
+type stereoPair struct {
+	left  int
+	right int
+}
+
+func audioPair(values resources, uri string) (stereoPair, error) {
+	var byOID map[string]int
+	if err := values.decode(uri, &byOID); err != nil {
+		return stereoPair{}, err
+	}
+	left, leftOK := byOID[strconv.Itoa(hdmi2DigitalLeftOID)]
+	right, rightOK := byOID[strconv.Itoa(hdmi2DigitalRightOID)]
+	if !leftOK || !rightOK {
+		return stereoPair{}, fmt.Errorf("the SMP did not return both HDMI 2 audio channels")
+	}
+	return stereoPair{left: left, right: right}, nil
 }
 
 func (c *Client) request(
@@ -702,6 +831,29 @@ func rtmpURI(channel int) string {
 
 func streamEnableURI(channel int) string {
 	return fmt.Sprintf("/encoder/%d/stream_enable", channel)
+}
+
+func audioOIDURI(oid int, parameter string) string {
+	return fmt.Sprintf("/audio/dsp/oid/%d/%s", oid, parameter)
+}
+
+func audioMultipleURI(parameter string) string {
+	return fmt.Sprintf(
+		"/audio/dsp/multiple_oid/%s?oids=%d,%d",
+		parameter, hdmi2DigitalLeftOID, hdmi2DigitalRightOID,
+	)
+}
+
+func audioGainURI() string {
+	return audioMultipleURI("g")
+}
+
+func audioMuteURI() string {
+	return audioMultipleURI("m")
+}
+
+func audioLevelURI() string {
+	return audioMultipleURI("v")
 }
 
 // boolValue matches what the unit accepts: a JSON number. It answers E13 to
