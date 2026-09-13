@@ -15,6 +15,12 @@ captures/
 *.apk
 *.aab
 *.keystore
+
+# The APK signing key. CI decodes it from a repository secret at build time,
+# and it must never be committed: whoever holds it can build an APK that
+# installs over the one on the tablet.
+*.p12
+*.jks
 .DS_Store
 .vscode/
 local.properties

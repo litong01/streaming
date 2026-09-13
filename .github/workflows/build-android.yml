@@ -73,8 +73,33 @@ jobs:
       - name: Test Go controller
         run: go test ./...
 
+      # Every build has to carry the same signature or Android will not
+      # install it over the copy already on the tablet, and an uninstall
+      # costs the tablet its saved configuration.
+      - name: Decode the signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret is set, so this APK gets a throwaway key and will not install over an existing copy."
+            exit 0
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.p12
+          echo "Decoded $(wc -c < release.p12) bytes of keystore."
+
       - name: Build installable debug APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          APK_VERSION_CODE: ${{ github.run_number }}
+          APK_VERSION_NAME: 1.0.${{ github.run_number }}
         run: ./gradlew --no-daemon assembleDebug
+
+      - name: Report how the APK was signed
+        run: |
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -1)
+          "$apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
+            | grep -i 'certificate DN\|SHA-256 digest' || true
 
       - name: Name the APK for download
         run: cp app/build/outputs/apk/debug/app-debug.apk streaming-debug.apk
