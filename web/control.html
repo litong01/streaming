@@ -234,32 +234,43 @@
     }
 
     .meter {
+      --meter-height: 122px;
       position: relative;
       width: 12px;
-      height: 122px;
+      height: var(--meter-height);
       overflow: hidden;
       border: 1px solid rgba(255, 255, 255, 0.16);
       border-radius: 3px;
       background: #080909;
     }
 
+    /*
+      The colours belong to the track, not to the bar: sizing the gradient to
+      the whole meter and anchoring it at the bottom keeps yellow and red where
+      they mean something, rather than riding along on the tip of a quiet
+      signal. Yellow starts at -12 dB and red at -3 dB, where the warning fires.
+    */
     .meter-fill {
       position: absolute;
       right: 0;
       bottom: 0;
       left: 0;
       height: 0;
-      background: linear-gradient(to top, #34a853 0 72%, #fbbc04 72% 96%, #ea4335 96%);
+      background: linear-gradient(to top, #34a853 0 86.7%, #fbbc04 86.7% 96.7%, #ea4335 96.7%);
+      background-repeat: no-repeat;
+      background-position: bottom;
+      background-size: 100% var(--meter-height);
       transition: height 100ms linear;
     }
 
+    /* Unlit it is just a cap, so the only red on the page means something. */
     .meter-clip {
       position: absolute;
       top: 0;
       right: 0;
       left: 0;
       height: 5px;
-      background: #53120e;
+      background: rgba(255, 255, 255, 0.12);
       transition: background 100ms linear, box-shadow 100ms linear;
     }
 
@@ -493,8 +504,11 @@
         grid-template-rows: auto 82px auto;
       }
 
+      .meter {
+        --meter-height: 82px;
+      }
+
       .fader-slot,
-      .meter,
       .scale {
         height: 82px;
       }
