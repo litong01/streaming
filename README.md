@@ -191,7 +191,9 @@ tablet plays. Both encoders take Channel A, and Channel A is the audio embedded
 in HDMI input 2, so one control serves English and Mandarin alike.
 
 It mirrors the unit's own Audio page: a fader and a level meter per side, a
-mute, and buttons that step a decibel at a time. The two faders are ganged,
+mute, and buttons that step a decibel at a time. Each fader is marked every six
+decibels across the range the unit accepts, `-18` to `+24` dB, which is also
+where the buttons stop. The two faders are ganged,
 because the gain is one volume rather than a balance to set. The meters are the
 unit's live readings rather than the fader positions, so a loud room shows up
 without anyone touching the control, and the warning above them lights when

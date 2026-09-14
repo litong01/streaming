@@ -126,7 +126,7 @@
     }
 
     .audio-panel {
-      width: 220px;
+      width: 232px;
       min-height: 236px;
       padding: 12px 14px;
       border: 1px solid var(--ring);
@@ -171,17 +171,51 @@
 
     .audio-channel {
       display: grid;
-      grid-template-columns: 34px 12px;
+      grid-template-columns: 26px 34px 12px;
       grid-template-rows: auto 122px auto;
       gap: 4px 6px;
       justify-content: center;
     }
 
     .channel-label {
-      grid-column: 1 / 3;
+      grid-column: 1 / 4;
       font-size: 0.75rem;
       color: var(--text-dim);
     }
+
+    /*
+      The scale is drawn against the handle's travel rather than the whole
+      slot, since a range input keeps half a thumb of margin at either end.
+    */
+    .scale {
+      --thumb: 16px;
+      position: relative;
+      width: 26px;
+      height: 122px;
+      font-size: 0.56rem;
+      font-variant-numeric: tabular-nums;
+      color: rgba(232, 234, 237, 0.5);
+    }
+
+    .tick {
+      position: absolute;
+      right: 0;
+      top: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--at));
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      transform: translateY(-50%);
+      white-space: nowrap;
+    }
+
+    .tick::after {
+      content: "";
+      width: 6px;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    .tick.minor::after { width: 3px; }
 
     .fader-slot {
       position: relative;
@@ -235,7 +269,7 @@
     }
 
     .gain-value {
-      grid-column: 1 / 3;
+      grid-column: 1 / 4;
       font-variant-numeric: tabular-nums;
       font-size: 0.72rem;
       color: var(--text-dim);
@@ -460,7 +494,8 @@
       }
 
       .fader-slot,
-      .meter {
+      .meter,
+      .scale {
         height: 82px;
       }
 
@@ -490,6 +525,16 @@
         <div class="audio-channels">
           <div class="audio-channel">
             <label class="channel-label" for="leftGain">Left</label>
+            <div class="scale" aria-hidden="true">
+              <span class="tick" style="--at: 0">+24</span>
+              <span class="tick minor" style="--at: 0.1429"></span>
+              <span class="tick" style="--at: 0.2857">+12</span>
+              <span class="tick minor" style="--at: 0.4286"></span>
+              <span class="tick" style="--at: 0.5714">0</span>
+              <span class="tick minor" style="--at: 0.7143"></span>
+              <span class="tick minor" style="--at: 0.8571"></span>
+              <span class="tick" style="--at: 1">-18</span>
+            </div>
             <div class="fader-slot">
               <input id="leftGain" class="gain-fader" type="range"
                      min="-180" max="240" step="1" disabled aria-label="Left gain">
@@ -502,6 +547,16 @@
           </div>
           <div class="audio-channel">
             <label class="channel-label" for="rightGain">Right</label>
+            <div class="scale" aria-hidden="true">
+              <span class="tick" style="--at: 0">+24</span>
+              <span class="tick minor" style="--at: 0.1429"></span>
+              <span class="tick" style="--at: 0.2857">+12</span>
+              <span class="tick minor" style="--at: 0.4286"></span>
+              <span class="tick" style="--at: 0.5714">0</span>
+              <span class="tick minor" style="--at: 0.7143"></span>
+              <span class="tick minor" style="--at: 0.8571"></span>
+              <span class="tick" style="--at: 1">-18</span>
+            </div>
             <div class="fader-slot">
               <input id="rightGain" class="gain-fader" type="range"
                      min="-180" max="240" step="1" disabled aria-label="Right gain">
