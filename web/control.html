@@ -287,13 +287,17 @@
     }
 
     .audio-buttons {
-      display: grid;
-      grid-template-columns: 42px 1fr 42px;
+      display: flex;
+      justify-content: center;
       gap: 7px;
       margin-top: 9px;
     }
 
     .audio-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
       min-height: 34px;
       border: 1px solid var(--ring-hover);
       border-radius: 9px;
@@ -311,6 +315,26 @@
       background: rgba(242, 139, 130, 0.18);
       color: var(--warn);
     }
+
+    /*
+      Mute is almost never touched, so it sits at the same size as the trims
+      either side of it and says its state with the slash instead of a word.
+    */
+    .mute-art {
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .mute-slash { display: none; }
+
+    .audio-button.muted .mute-wave { display: none; }
+
+    .audio-button.muted .mute-slash { display: inline; }
 
     .audio-panel.unavailable {
       opacity: 0.42;
@@ -585,7 +609,14 @@
         <div class="audio-buttons">
           <button id="gainDown" class="audio-button" type="button" disabled
                   aria-label="Lower stream audio one decibel">−</button>
-          <button id="audioMute" class="audio-button" type="button" disabled>Mute</button>
+          <button id="audioMute" class="audio-button" type="button" disabled
+                  title="Mute" aria-label="Mute stream audio">
+            <svg class="mute-art" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M11 4.5 6.5 8.5H3.5v7h3L11 19.5z"/>
+              <path class="mute-wave" d="M14.6 9a4.2 4.2 0 0 1 0 6M17.4 6.6a7.6 7.6 0 0 1 0 10.8"/>
+              <path class="mute-slash" d="M15 9.5 20.5 15M20.5 9.5 15 15"/>
+            </svg>
+          </button>
           <button id="gainUp" class="audio-button" type="button" disabled
                   aria-label="Raise stream audio one decibel">+</button>
         </div>
@@ -782,7 +813,11 @@
       rightClip.classList.toggle("active", rightLevel >= -30);
       clipWarning.classList.toggle("active", Boolean(data.clipping));
 
-      audioMute.textContent = currentMuted ? "Unmute" : "Mute";
+      audioMute.title = currentMuted ? "Unmute" : "Mute";
+      audioMute.setAttribute(
+        "aria-label",
+        currentMuted ? "Unmute stream audio" : "Mute stream audio"
+      );
       audioMute.classList.toggle("muted", currentMuted);
       audioMute.setAttribute("aria-pressed", String(currentMuted));
       enableAudioControls(true);
