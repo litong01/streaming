@@ -63,6 +63,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with: 
+          packages: "cmdline-tools;latest"
 
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.3.11579264"
