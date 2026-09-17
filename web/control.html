@@ -63,6 +63,8 @@
       font-weight: 300;
       letter-spacing: -0.03em;
       line-height: 1;
+      /* Fixed-width digits, so the seconds ticking over don't shift the line */
+      font-variant-numeric: tabular-nums;
     }
 
     .date {
@@ -71,6 +73,12 @@
       color: var(--text-dim);
     }
 
+    /*
+      The header is fixed, and its height moves with the clamped clock and date
+      type, so the top padding is measured from the header itself rather than
+      guessed: a tablet that scales the clock up used to push the date down onto
+      the preview frame. The value here only covers the first paint.
+    */
     #stage {
       position: fixed;
       inset: 0;
@@ -78,8 +86,10 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      justify-content: safe center;
       gap: 28px;
-      padding: 88px 24px 72px;
+      padding: var(--header-space, 116px) 24px 72px;
+      overflow-y: auto;
     }
 
     /*
@@ -547,7 +557,7 @@
 </head>
 <body>
   <div id="header">
-    <div id="clock" class="clock">--:--</div>
+    <div id="clock" class="clock">--:--:--</div>
     <div id="date" class="date"></div>
   </div>
 
@@ -668,6 +678,7 @@
   </div>
 
   <script>
+    const header = document.getElementById("header");
     const clock = document.getElementById("clock");
     const date = document.getElementById("date");
     const statusValue = document.getElementById("statusValue");
@@ -702,14 +713,45 @@
       return value < 10 ? "0" + value : String(value);
     }
 
+    // Keeps the clearance below the header equal to the header's real height,
+    // whatever the tablet makes of the clamped font sizes.
+    function reserveHeaderSpace() {
+      const space = Math.ceil(header.getBoundingClientRect().height) + 24;
+      document.documentElement.style.setProperty("--header-space", space + "px");
+    }
+
+    // The date is only rewritten when it actually reads differently, so the
+    // once-a-second tick does not redo the locale formatting or the layout.
+    let shownDate = "";
+
     function updateClock() {
       const now = new Date();
-      clock.textContent = pad(now.getHours()) + ":" + pad(now.getMinutes());
-      date.textContent = now.toLocaleDateString(undefined, {
+      clock.textContent =
+        pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+      const today = now.toLocaleDateString(undefined, {
         weekday: "long",
         month: "long",
         day: "numeric"
       });
+      if (today !== shownDate) {
+        shownDate = today;
+        date.textContent = today;
+      }
+    }
+
+    /*
+      A repeating interval shows a second late by as much as its own period and
+      slides further out the longer it runs, and Android suspends timers while
+      the screen is off, so the clock is aimed at the next whole second after
+      every tick and re-read whenever the page comes back to the foreground.
+    */
+    let clockTimer = 0;
+
+    function tickClock() {
+      updateClock();
+      const untilNextSecond = 1000 - (new Date().getMilliseconds());
+      clearTimeout(clockTimer);
+      clockTimer = setTimeout(tickClock, untilNextSecond + 20);
     }
 
     function applyState(data) {
@@ -969,8 +1011,21 @@
     gainUp.addEventListener("click", () => setAudioGain(currentGainTenths + 10));
     audioMute.addEventListener("click", () => setAudioMute(!currentMuted));
 
-    updateClock();
-    setInterval(updateClock, 10000);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) tickClock();
+    });
+    window.addEventListener("focus", tickClock);
+    window.addEventListener("pageshow", tickClock);
+
+    tickClock();
+
+    reserveHeaderSpace();
+    window.addEventListener("resize", reserveHeaderSpace);
+    window.addEventListener("orientationchange", reserveHeaderSpace);
+    if (window.ResizeObserver) {
+      new ResizeObserver(reserveHeaderSpace).observe(header);
+    }
+
     refreshStatus();
     setInterval(refreshStatus, 3000);
     refreshAudio();
