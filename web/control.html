@@ -233,6 +233,12 @@
       height: 122px;
     }
 
+    /*
+      The rotation is only paint deep: the browser still treats this as a
+      horizontal slider and hands vertical touch drags to the scroller, so a
+      finger moving the fader used to drag the stage along with it. Claiming
+      every gesture on the control keeps the two apart.
+    */
     .gain-fader {
       position: absolute;
       top: 51px;
@@ -240,6 +246,7 @@
       width: 122px;
       accent-color: var(--accent);
       transform: rotate(-90deg);
+      touch-action: none;
       cursor: pointer;
     }
 
