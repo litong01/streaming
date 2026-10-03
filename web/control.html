@@ -130,13 +130,14 @@
 
     .preview-row {
       display: flex;
+      flex-wrap: wrap;
       align-items: stretch;
       justify-content: center;
       gap: 18px;
     }
 
     .audio-panel {
-      width: 232px;
+      width: 328px;
       min-height: 236px;
       padding: 12px 14px;
       border: 1px solid var(--ring);
@@ -173,11 +174,96 @@
       box-shadow: 0 0 12px rgba(242, 139, 130, 0.5);
     }
 
+    .audio-body {
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      gap: 14px;
+    }
+
     .audio-channels {
       display: flex;
       justify-content: center;
       gap: 20px;
     }
+
+    /*
+      Auto Volume is the control an operator should find at a glance, so its
+      box is larger than the + and − trims, and the whole tile takes the tap.
+    */
+    .auto-volume {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 86px;
+      padding: 10px 6px;
+      border: 1px solid var(--ring-hover);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      font-size: 0.8rem;
+      font-weight: 600;
+      line-height: 1.2;
+      cursor: pointer;
+      transition: border-color 150ms ease, background 150ms ease;
+    }
+
+    .auto-volume.on {
+      border-color: rgba(138, 180, 248, 0.6);
+      background: rgba(138, 180, 248, 0.14);
+    }
+
+    .auto-volume input {
+      -webkit-appearance: none;
+      appearance: none;
+      display: grid;
+      place-content: center;
+      width: 50px;
+      height: 50px;
+      margin: 0;
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      border-radius: 11px;
+      background: rgba(0, 0, 0, 0.3);
+      cursor: pointer;
+    }
+
+    .auto-volume input::after {
+      content: "";
+      width: 22px;
+      height: 11px;
+      border-bottom: 4px solid var(--bg);
+      border-left: 4px solid var(--bg);
+      opacity: 0;
+      transform: translateY(-3px) rotate(-45deg);
+    }
+
+    .auto-volume input:checked {
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+
+    .auto-volume input:checked::after { opacity: 1; }
+
+    .auto-volume input:disabled { cursor: not-allowed; }
+
+    .auto-note {
+      min-height: 2.4em;
+      color: var(--text-dim);
+      font-size: 0.66rem;
+      font-weight: 400;
+    }
+
+    .audio-panel.auto .gain-fader,
+    .audio-panel.auto #gainDown,
+    .audio-panel.auto #gainUp {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .audio-panel.auto #gainDown:active,
+    .audio-panel.auto #gainUp:active { transform: none; }
 
     .audio-channel {
       display: grid;
@@ -358,7 +444,8 @@
     }
 
     .audio-panel.unavailable .audio-button,
-    .audio-panel.unavailable .gain-fader {
+    .audio-panel.unavailable .gain-fader,
+    .audio-panel.unavailable .auto-volume {
       cursor: not-allowed;
     }
 
@@ -577,51 +664,59 @@
       <section id="audioPanel" class="audio-panel unavailable" aria-label="Stream audio">
         <div class="audio-title">Stream Audio · HDMI 2</div>
         <div id="clipWarning" class="clip-warning" role="status">LEVEL TOO HIGH</div>
-        <div class="audio-channels">
-          <div class="audio-channel">
-            <label class="channel-label" for="leftGain">Left</label>
-            <div class="scale" aria-hidden="true">
-              <span class="tick" style="--at: 0">+24</span>
-              <span class="tick minor" style="--at: 0.1429"></span>
-              <span class="tick" style="--at: 0.2857">+12</span>
-              <span class="tick minor" style="--at: 0.4286"></span>
-              <span class="tick" style="--at: 0.5714">0</span>
-              <span class="tick minor" style="--at: 0.7143"></span>
-              <span class="tick minor" style="--at: 0.8571"></span>
-              <span class="tick" style="--at: 1">-18</span>
+        <div class="audio-body">
+          <div class="audio-channels">
+            <div class="audio-channel">
+              <label class="channel-label" for="leftGain">Left</label>
+              <div class="scale" aria-hidden="true">
+                <span class="tick" style="--at: 0">+24</span>
+                <span class="tick minor" style="--at: 0.1429"></span>
+                <span class="tick" style="--at: 0.2857">+12</span>
+                <span class="tick minor" style="--at: 0.4286"></span>
+                <span class="tick" style="--at: 0.5714">0</span>
+                <span class="tick minor" style="--at: 0.7143"></span>
+                <span class="tick minor" style="--at: 0.8571"></span>
+                <span class="tick" style="--at: 1">-18</span>
+              </div>
+              <div class="fader-slot">
+                <input id="leftGain" class="gain-fader" type="range"
+                       min="-180" max="240" step="1" disabled aria-label="Left gain">
+              </div>
+              <div class="meter" aria-label="Left audio level">
+                <div id="leftMeter" class="meter-fill"></div>
+                <div id="leftClip" class="meter-clip"></div>
+              </div>
+              <output id="leftGainValue" class="gain-value" for="leftGain">-- dB</output>
             </div>
-            <div class="fader-slot">
-              <input id="leftGain" class="gain-fader" type="range"
-                     min="-180" max="240" step="1" disabled aria-label="Left gain">
+            <div class="audio-channel">
+              <label class="channel-label" for="rightGain">Right</label>
+              <div class="scale" aria-hidden="true">
+                <span class="tick" style="--at: 0">+24</span>
+                <span class="tick minor" style="--at: 0.1429"></span>
+                <span class="tick" style="--at: 0.2857">+12</span>
+                <span class="tick minor" style="--at: 0.4286"></span>
+                <span class="tick" style="--at: 0.5714">0</span>
+                <span class="tick minor" style="--at: 0.7143"></span>
+                <span class="tick minor" style="--at: 0.8571"></span>
+                <span class="tick" style="--at: 1">-18</span>
+              </div>
+              <div class="fader-slot">
+                <input id="rightGain" class="gain-fader" type="range"
+                       min="-180" max="240" step="1" disabled aria-label="Right gain">
+              </div>
+              <div class="meter" aria-label="Right audio level">
+                <div id="rightMeter" class="meter-fill"></div>
+                <div id="rightClip" class="meter-clip"></div>
+              </div>
+              <output id="rightGainValue" class="gain-value" for="rightGain">-- dB</output>
             </div>
-            <div class="meter" aria-label="Left audio level">
-              <div id="leftMeter" class="meter-fill"></div>
-              <div id="leftClip" class="meter-clip"></div>
-            </div>
-            <output id="leftGainValue" class="gain-value" for="leftGain">-- dB</output>
           </div>
-          <div class="audio-channel">
-            <label class="channel-label" for="rightGain">Right</label>
-            <div class="scale" aria-hidden="true">
-              <span class="tick" style="--at: 0">+24</span>
-              <span class="tick minor" style="--at: 0.1429"></span>
-              <span class="tick" style="--at: 0.2857">+12</span>
-              <span class="tick minor" style="--at: 0.4286"></span>
-              <span class="tick" style="--at: 0.5714">0</span>
-              <span class="tick minor" style="--at: 0.7143"></span>
-              <span class="tick minor" style="--at: 0.8571"></span>
-              <span class="tick" style="--at: 1">-18</span>
-            </div>
-            <div class="fader-slot">
-              <input id="rightGain" class="gain-fader" type="range"
-                     min="-180" max="240" step="1" disabled aria-label="Right gain">
-            </div>
-            <div class="meter" aria-label="Right audio level">
-              <div id="rightMeter" class="meter-fill"></div>
-              <div id="rightClip" class="meter-clip"></div>
-            </div>
-            <output id="rightGainValue" class="gain-value" for="rightGain">-- dB</output>
-          </div>
+          <label id="autoVolumeTile" class="auto-volume">
+            <input id="autoVolume" type="checkbox" disabled
+                   aria-describedby="autoNote">
+            <span>Auto Volume</span>
+            <span id="autoNote" class="auto-note"></span>
+          </label>
         </div>
         <div class="audio-buttons">
           <button id="gainDown" class="audio-button" type="button" disabled
@@ -708,6 +803,9 @@
     const gainDown = document.getElementById("gainDown");
     const gainUp = document.getElementById("gainUp");
     const audioMute = document.getElementById("audioMute");
+    const autoVolume = document.getElementById("autoVolume");
+    const autoVolumeTile = document.getElementById("autoVolumeTile");
+    const autoNote = document.getElementById("autoNote");
     let busy = false;
     let previewPlaying = false;
     let audioBusy = false;
@@ -715,6 +813,7 @@
     let audioAvailable = false;
     let currentGainTenths = 0;
     let currentMuted = false;
+    let currentAuto = false;
 
     function pad(value) {
       return value < 10 ? "0" + value : String(value);
@@ -830,13 +929,28 @@
       return Math.max(0, Math.min(100, ((tenths + 900) / 900) * 100));
     }
 
+    // While Auto Volume is on the server owns the gain, so the faders and the
+    // trims only show what it chooses. Mute stays in the operator's hands.
     function enableAudioControls(enabled) {
       const usable = enabled && !audioBusy;
-      leftGain.disabled = !usable;
-      rightGain.disabled = !usable;
-      gainDown.disabled = !usable;
-      gainUp.disabled = !usable;
+      const manual = usable && !currentAuto;
+      leftGain.disabled = !manual;
+      rightGain.disabled = !manual;
+      gainDown.disabled = !manual;
+      gainUp.disabled = !manual;
       audioMute.disabled = !usable;
+      autoVolume.disabled = !usable;
+    }
+
+    function showAutoVolume(on, note) {
+      currentAuto = on;
+      autoVolume.checked = on;
+      autoVolumeTile.classList.toggle("on", on);
+      audioPanel.classList.toggle("auto", on);
+      autoNote.textContent = on ? note || "" : "";
+      if (on) {
+        audioEditing = false;
+      }
     }
 
     function applyAudioState(data) {
@@ -846,6 +960,7 @@
         (Number(data.leftGainTenths) + Number(data.rightGainTenths)) / 2
       );
       currentMuted = Boolean(data.muted);
+      showAutoVolume(Boolean(data.autoVolume), data.autoNote);
 
       if (!audioEditing) {
         leftGain.value = data.leftGainTenths;
@@ -881,6 +996,7 @@
       leftClip.classList.remove("active");
       rightClip.classList.remove("active");
       clipWarning.classList.remove("active");
+      autoNote.textContent = "";
     }
 
     async function refreshAudio() {
@@ -943,6 +1059,32 @@
         }
       } catch (error) {
         statusError.textContent = "Audio mute failed: " + error;
+      } finally {
+        audioBusy = false;
+        enableAudioControls(audioAvailable);
+        await refreshAudio();
+      }
+    }
+
+    async function setAutoVolume(enabled) {
+      if (!audioAvailable || audioBusy) {
+        autoVolume.checked = currentAuto;
+        return;
+      }
+      audioBusy = true;
+      enableAudioControls(false);
+      try {
+        const response = await fetch("/api/audio/auto", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: enabled })
+        });
+        if (response.status !== 204) {
+          applyAudioState(await readJson(response));
+        }
+      } catch (error) {
+        autoVolume.checked = currentAuto;
+        statusError.textContent = "Auto Volume change failed: " + error;
       } finally {
         audioBusy = false;
         enableAudioControls(audioAvailable);
@@ -1017,6 +1159,7 @@
     gainDown.addEventListener("click", () => setAudioGain(currentGainTenths - 10));
     gainUp.addEventListener("click", () => setAudioGain(currentGainTenths + 10));
     audioMute.addEventListener("click", () => setAudioMute(!currentMuted));
+    autoVolume.addEventListener("change", () => setAutoVolume(autoVolume.checked));
 
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) tickClock();

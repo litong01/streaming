@@ -182,15 +182,39 @@ func (c *Client) QueryAudio(cfg config.Config) (AudioState, bool, error) {
 
 // SetAudioGain gangs HDMI 2's left and right gain controls.
 func (c *Client) SetAudioGain(cfg config.Config, gainTenths int) error {
+	if err := checkAudioGain(cfg, gainTenths); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writeAudioGain(cfg, gainTenths)
+}
+
+// TrySetAudioGain is SetAudioGain for automatic adjustments. Rather than wait
+// behind a stream start, it reports false and leaves the gain alone, since the
+// reading it was decided from will be stale by the time the start finishes.
+func (c *Client) TrySetAudioGain(cfg config.Config, gainTenths int) (bool, error) {
+	if err := checkAudioGain(cfg, gainTenths); err != nil {
+		return false, err
+	}
+	if !c.mu.TryLock() {
+		return false, nil
+	}
+	defer c.mu.Unlock()
+	return true, c.writeAudioGain(cfg, gainTenths)
+}
+
+func checkAudioGain(cfg config.Config, gainTenths int) error {
 	if !cfg.IsSmpConfigured() {
 		return errors.New("SMP is not configured")
 	}
 	if gainTenths < minAudioGainTenths || gainTenths > maxAudioGainTenths {
 		return fmt.Errorf("gain must be between -18.0 and +24.0 dB")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	return nil
+}
 
+func (c *Client) writeAudioGain(cfg config.Config, gainTenths int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	return c.writeMany(ctx, cfg, []resourceUpdate{

@@ -32,6 +32,9 @@ type Config struct {
 	SmpPassword         string `json:"smpPassword"`
 	HTTPPort            int    `json:"httpPort"`
 	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
+	// AutoVolume is kept with the rest so the automatic gain carries on after
+	// the tablet restarts, with nobody there to switch it back on.
+	AutoVolume bool `json:"autoVolume"`
 }
 
 type PublicConfig struct {

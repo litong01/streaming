@@ -199,6 +199,44 @@ unit's live readings rather than the fader positions, so a loud room shows up
 without anyone touching the control, and the warning above them lights when
 either side reaches -3 dB.
 
+The server reads the audio twice a second and answers every open control page
+from that one reading, so the SMP sees the same load however many pages are
+watching.
+
+### Auto Volume
+
+The **Auto Volume** box to the right of the faders hands the gain to the
+server. It moves the same ganged gain the faders do, from the same meter
+readings, so a speaker who is much quieter or louder than the last one is
+evened out without anyone watching the screen. While it is on, the faders and
+the + and − buttons are disabled and only show what the server chooses; mute
+still works. The choice is saved with the configuration, so it survives a
+restart of the tablet.
+
+It is deliberately slow to turn up and quick to turn down, and it is bounded
+so it can never run away:
+
+- It aims for an average meter reading of -18 dB and leaves anything within
+  4 dB of that alone.
+- Readings below -50 dB count as silence and are never turned up, so a pause
+  or an idle source's hiss stays where it is.
+- The automatic gain stays between -12 and +18 dB, inside the unit's -18 to
+  +24 dB.
+- It raises at most 1 dB at a time and no more than every 2 seconds, never
+  within 5 seconds of a cut. It lowers at most 3 dB at a time, and a reading at
+  the -3 dB warning level cuts 2 dB straight away.
+- It writes to the SMP at most once a second, one command at a time, and only
+  after six fresh readings since the last change agree. In practice that is a
+  change every 3 seconds at most while the level is off target, and nothing
+  while it is steady.
+- It steps aside rather than queue behind a stream start, and backs off for
+  3 seconds after any failed read or write.
+
+The controller is `internal/autovolume`, a pure state machine with its own
+tests. It treats the SMP's meter as the level after the gain, which is what the
+clip warning already assumes; that is worth confirming on the unit by watching
+the meters move when the fader does.
+
 ## Checking the connection
 
 **Test connection** on the configuration page checks both things the control

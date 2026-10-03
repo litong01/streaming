@@ -414,6 +414,29 @@ func TestSetAudioGainRejectsValuesOutsideTheSMPRange(t *testing.T) {
 	}
 }
 
+func TestTrySetAudioGainStepsAsideWhileBusy(t *testing.T) {
+	fake := newFakeSMP(t)
+	client := New()
+
+	client.mu.Lock()
+	applied, err := client.TrySetAudioGain(fake.config(t), 50)
+	client.mu.Unlock()
+	if err != nil || applied {
+		t.Fatalf("applied=%v err=%v while busy", applied, err)
+	}
+	if len(fake.writtenURIs()) != 0 {
+		t.Fatalf("wrote %v while busy", fake.writtenURIs())
+	}
+
+	applied, err = client.TrySetAudioGain(fake.config(t), 50)
+	if err != nil || !applied {
+		t.Fatalf("applied=%v err=%v when idle", applied, err)
+	}
+	if fake.audioGain[hdmi2DigitalLeftOID] != 50 || fake.audioGain[hdmi2DigitalRightOID] != 50 {
+		t.Fatalf("gain was not ganged: %+v", fake.audioGain)
+	}
+}
+
 func TestSetAudioMuteGangsLeftAndRight(t *testing.T) {
 	fake := newFakeSMP(t)
 

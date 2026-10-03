@@ -12,8 +12,18 @@ import (
 	"sync"
 	"time"
 
+	"streaming/internal/autovolume"
 	"streaming/internal/config"
 	"streaming/internal/smp"
+)
+
+// The audio is read on this one schedule however many control pages are open:
+// they are all answered from the last reading. The automatic gain is decided
+// from the same readings, and writes at most once per autovolume.MinInterval.
+const (
+	audioPollInterval = 500 * time.Millisecond
+	audioErrorBackoff = 3 * time.Second
+	audioStaleAfter   = 3 * time.Second
 )
 
 type Server struct {
@@ -25,6 +35,13 @@ type Server struct {
 	state  smp.State
 	http   *http.Server
 	cancel context.CancelFunc
+
+	audioMu  sync.Mutex
+	audio    smp.AudioState
+	audioAt  time.Time
+	audioErr error
+	auto     *autovolume.Controller
+	autoNote string
 }
 
 type Pages struct {
@@ -41,6 +58,8 @@ func New(store *config.Store, client *smp.Client, pages Pages) *Server {
 			ActiveStream:  smp.ActiveNone,
 			StatusMessage: "Idle",
 		},
+		auto:     autovolume.New(autovolume.DefaultSettings()),
+		autoNote: autovolume.NoteOff,
 	}
 }
 
@@ -62,6 +81,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		s.mu.Unlock()
 
 		s.startPoller(runCtx)
+		s.startAudioPoller(runCtx)
 		log.Printf("listening on http://0.0.0.0:%d/", cfg.HTTPPort)
 
 		errCh := make(chan error, 1)
@@ -130,6 +150,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/audio", s.handleAudio)
 	mux.HandleFunc("/api/audio/gain", s.handleAudioGain)
 	mux.HandleFunc("/api/audio/mute", s.handleAudioMute)
+	mux.HandleFunc("/api/audio/auto", s.handleAudioAuto)
 	mux.HandleFunc("/api/stream/english", s.handleEnglish)
 	mux.HandleFunc("/api/stream/mandarin", s.handleMandarin)
 	mux.HandleFunc("/api/stream/stop", s.handleStop)
@@ -206,16 +227,7 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	state, polled, err := s.client.QueryAudio(s.store.Get())
-	if !polled {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, state)
+	s.writeAudioState(w)
 }
 
 type audioGainPayload struct {
@@ -238,10 +250,21 @@ func (s *Server) handleAudioGain(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err := s.client.SetAudioGain(s.store.Get(), payload.GainTenths); err != nil {
+	cfg := s.store.Get()
+	if cfg.AutoVolume {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "turn off Auto Volume to set the volume by hand",
+		})
+		return
+	}
+	if err := s.client.SetAudioGain(cfg, payload.GainTenths); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	s.audioMu.Lock()
+	s.audio.LeftGainTenths = payload.GainTenths
+	s.audio.RightGainTenths = payload.GainTenths
+	s.audioMu.Unlock()
 	s.writeAudioState(w)
 }
 
@@ -263,20 +286,133 @@ func (s *Server) handleAudioMute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	s.audioMu.Lock()
+	s.audio.Muted = payload.Muted
+	s.audioMu.Unlock()
 	s.writeAudioState(w)
 }
 
+type audioAutoPayload struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (s *Server) handleAudioAuto(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload audioAutoPayload
+	if err := readJSON(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	next := s.store.Get()
+	next.AutoVolume = payload.Enabled
+	if err := s.store.Save(next); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audioMu.Lock()
+	s.auto.Reset()
+	s.autoNote = autovolume.NoteOff
+	if payload.Enabled {
+		s.autoNote = autovolume.NoteWaiting
+	}
+	s.audioMu.Unlock()
+	s.writeAudioState(w)
+}
+
+type audioPayload struct {
+	smp.AudioState
+	AutoVolume bool   `json:"autoVolume"`
+	AutoNote   string `json:"autoNote"`
+}
+
+// writeAudioState answers from the last reading rather than asking the SMP,
+// so a page polling twice a second adds nothing to the unit's load.
 func (s *Server) writeAudioState(w http.ResponseWriter) {
-	state, polled, err := s.client.QueryAudio(s.store.Get())
-	if !polled {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if err != nil {
+	autoVolume := s.store.Get().AutoVolume
+	s.audioMu.Lock()
+	state, at, err, note := s.audio, s.audioAt, s.audioErr, s.autoNote
+	s.audioMu.Unlock()
+
+	switch {
+	case err != nil:
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
+	case at.IsZero():
+		w.WriteHeader(http.StatusNoContent)
+	case time.Since(at) > audioStaleAfter:
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the SMP's audio reading is out of date"})
+	default:
+		writeJSON(w, http.StatusOK, audioPayload{AudioState: state, AutoVolume: autoVolume, AutoNote: note})
 	}
-	writeJSON(w, http.StatusOK, state)
+}
+
+func (s *Server) startAudioPoller(ctx context.Context) {
+	go func() {
+		for {
+			wait := audioPollInterval
+			if !s.pollAudio() {
+				wait = audioErrorBackoff
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+		}
+	}()
+}
+
+// pollAudio reads the SMP's audio once and, when Auto Volume is on, adjusts
+// the gain from it. It reports false when the SMP could not be read or
+// written, so the next attempt backs off rather than hammering the unit.
+func (s *Server) pollAudio() bool {
+	cfg := s.store.Get()
+	state, polled, err := s.client.QueryAudio(cfg)
+	if !polled {
+		return true
+	}
+	now := time.Now()
+	s.audioMu.Lock()
+	if err != nil {
+		s.audioErr = err
+		s.audioMu.Unlock()
+		return false
+	}
+	s.audio, s.audioAt, s.audioErr = state, now, nil
+	if !cfg.AutoVolume {
+		s.audioMu.Unlock()
+		return true
+	}
+	current := (state.LeftGainTenths + state.RightGainTenths) / 2
+	decision := s.auto.Observe(autovolume.Reading{
+		At:               now,
+		LeftLevelTenths:  state.LeftLevelTenths,
+		RightLevelTenths: state.RightLevelTenths,
+		GainTenths:       current,
+		Muted:            state.Muted,
+	})
+	s.autoNote = decision.Note
+	s.audioMu.Unlock()
+
+	if !decision.Change || !s.store.Get().AutoVolume {
+		return true
+	}
+	applied, err := s.client.TrySetAudioGain(cfg, decision.GainTenths)
+	if err != nil {
+		log.Printf("auto volume: set gain to %d tenths: %v", decision.GainTenths, err)
+		return false
+	}
+	if !applied {
+		return true
+	}
+	s.audioMu.Lock()
+	s.auto.Applied(time.Now(), current, decision.GainTenths)
+	s.audio.LeftGainTenths = decision.GainTenths
+	s.audio.RightGainTenths = decision.GainTenths
+	s.audioMu.Unlock()
+	return true
 }
 
 func (s *Server) handleEnglish(w http.ResponseWriter, r *http.Request) {
