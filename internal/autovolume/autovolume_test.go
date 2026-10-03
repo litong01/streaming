@@ -52,7 +52,7 @@ func (r *room) checkGainInSafeRange() {
 
 func TestQuietSourceIsBroughtUpToTarget(t *testing.T) {
 	r := newRoom(t, 0)
-	r.play(-300, 2*time.Minute)
+	r.play(-300, 3*time.Minute)
 	level := -300 + r.gain
 	s := DefaultSettings()
 	if level < s.TargetTenths-s.DeadbandTenths || level > s.TargetTenths+s.DeadbandTenths {
@@ -62,7 +62,7 @@ func TestQuietSourceIsBroughtUpToTarget(t *testing.T) {
 
 func TestLoudSourceIsBroughtDownToTarget(t *testing.T) {
 	r := newRoom(t, 0)
-	r.play(-80, time.Minute)
+	r.play(-80, 3*time.Minute)
 	level := -80 + r.gain
 	s := DefaultSettings()
 	if level < s.TargetTenths-s.DeadbandTenths || level > s.TargetTenths+s.DeadbandTenths {
@@ -167,7 +167,7 @@ func TestMutedHoldsAndForgetsReadings(t *testing.T) {
 func TestLouderChannelDecides(t *testing.T) {
 	c := New(DefaultSettings())
 	var d Decision
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 40; i++ {
 		d = c.Observe(Reading{At: start.Add(time.Duration(i) * poll), LeftLevelTenths: -400, RightLevelTenths: -60})
 	}
 	if !d.Change || d.GainTenths >= 0 {
@@ -180,6 +180,30 @@ func TestGainSetByHandOutsideTheRangeIsWalkedBack(t *testing.T) {
 	r.play(-900, 30*time.Second)
 	if r.gain != DefaultSettings().MaxGainTenths {
 		t.Fatalf("gain left at %d", r.gain)
+	}
+}
+
+func TestAShortPhraseDoesNotMoveTheGain(t *testing.T) {
+	r := newRoom(t, 0)
+	for i := 0; i < 20; i++ {
+		r.play(-300, 4*time.Second)
+		r.play(-180, 16*time.Second)
+		r.play(-60, 4*time.Second)
+		r.play(-180, 16*time.Second)
+	}
+	if len(r.changes) != 0 || r.gain != 0 {
+		t.Fatalf("phrases moved the gain to %d over %d changes", r.gain, len(r.changes))
+	}
+}
+
+func TestSustainedOffsetMovesOneDecibelAfterTheWindowFills(t *testing.T) {
+	r := newRoom(t, 0)
+	if d := r.play(-300, 14*time.Second); d.Change || r.gain != 0 {
+		t.Fatalf("moved before the window filled: gain %d %+v", r.gain, d)
+	}
+	r.play(-300, 5*time.Second)
+	if r.gain != DefaultSettings().RaiseStepTenths || len(r.changes) != 1 {
+		t.Fatalf("first step gain %d over %d changes", r.gain, len(r.changes))
 	}
 }
 

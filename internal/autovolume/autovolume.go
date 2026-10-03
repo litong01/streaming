@@ -26,16 +26,20 @@ type Settings struct {
 	// -18 to +24 dB the SMP accepts.
 	MinGainTenths int
 	MaxGainTenths int
-	// The most one change may raise or lower the gain.
+	// The most one ordinary change may raise or lower the gain. A reading at
+	// the clip level uses ClipStepTenths and does not wait for the average.
 	RaiseStepTenths int
 	LowerStepTenths int
-	// Window is how far back readings are averaged, and MinReadings how many
-	// non-silent ones it must hold before the average is trusted.
+	// Window is how far back readings are kept. They are trusted only once
+	// MinReadings non-silent ones are in hand and the oldest and newest are
+	// at least MinSpan apart, so one sentence cannot move the gain.
 	Window      time.Duration
 	MinReadings int
-	// The least time between two changes, between two raises, and between a
-	// cut and the next raise. Raising slowly and cutting quickly is what keeps
-	// the volume from pumping.
+	MinSpan     time.Duration
+	// MinInterval is the least time between two changes, so a clip warning
+	// cannot cut again before the new gain can show up on the meter.
+	// RaiseInterval and RaiseHoldAfterCut keep a raise from undoing a cut
+	// before that cut has been heard.
 	MinInterval       time.Duration
 	RaiseInterval     time.Duration
 	RaiseHoldAfterCut time.Duration
@@ -51,12 +55,13 @@ func DefaultSettings() Settings {
 		MinGainTenths:     -120,
 		MaxGainTenths:     180,
 		RaiseStepTenths:   10,
-		LowerStepTenths:   30,
-		Window:            4 * time.Second,
-		MinReadings:       6,
+		LowerStepTenths:   10,
+		Window:            20 * time.Second,
+		MinReadings:       16,
+		MinSpan:           15 * time.Second,
 		MinInterval:       time.Second,
 		RaiseInterval:     2 * time.Second,
-		RaiseHoldAfterCut: 5 * time.Second,
+		RaiseHoldAfterCut: 15 * time.Second,
 	}
 }
 
@@ -165,7 +170,7 @@ func (c *Controller) Observe(r Reading) Decision {
 		return change(min(gain+s.RaiseStepTenths, s.MinGainTenths), NoteRaising)
 	}
 
-	if len(c.samples) < s.MinReadings {
+	if len(c.samples) < s.MinReadings || c.span() < s.MinSpan {
 		return hold(NoteWaiting)
 	}
 	offset := s.TargetTenths - c.average()
@@ -202,6 +207,13 @@ func (c *Controller) dropBefore(cutoff time.Time) {
 		}
 	}
 	c.samples = kept
+}
+
+func (c *Controller) span() time.Duration {
+	if len(c.samples) < 2 {
+		return 0
+	}
+	return c.samples[len(c.samples)-1].at.Sub(c.samples[0].at)
 }
 
 func (c *Controller) average() int {

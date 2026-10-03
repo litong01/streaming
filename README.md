@@ -226,22 +226,27 @@ the + and − buttons are disabled and only show what the server chooses; mute
 still works. The choice is saved with the configuration, so it survives a
 restart of the tablet.
 
-It is deliberately slow to turn up and quick to turn down, and it is bounded
-so it can never run away:
+It waits until the level has been off for a sustained stretch, then nudges,
+and it is bounded so it can never run away:
 
 - It aims for an average meter reading of -18 dB and leaves anything within
   4 dB of that alone.
 - Readings below -50 dB count as silence and are never turned up, so a pause
-  or an idle source's hiss stays where it is.
+  or an idle source's hiss stays where it is. A pause does not erase the
+  sound heard just before it.
 - The automatic gain stays between -12 and +18 dB, inside the unit's -18 to
   +24 dB.
-- It raises at most 1 dB at a time and no more than every 2 seconds, never
-  within 5 seconds of a cut. It lowers at most 3 dB at a time, and a reading at
-  the -3 dB warning level cuts 2 dB straight away.
-- It writes to the SMP at most once a second, one command at a time, and only
-  after six fresh readings since the last change agree. In practice that is a
-  change every 3 seconds at most while the level is off target, and nothing
-  while it is steady.
+- It moves only when at least 15 seconds of sound, taken from the last 20
+  seconds, sits outside that range. Each move is 1 dB, and those readings are
+  then dropped, because the meter is the level after the gain. The next move
+  waits for another 15 seconds of sound. A sentence cannot move it. A speaker
+  who stays quiet or loud comes about 1 dB closer every 15 seconds, so a
+  large mismatch settles over a couple of minutes rather than pumping.
+- A reading at the -3 dB warning level cuts 2 dB straight away, without
+  waiting for that average, and the gain is not raised again for 15 seconds.
+- It writes to the SMP at most once a second, one command at a time. Each
+  move that is applied is written to the process log with the meter, the gain
+  before and after, and the reason. On the tablet that log is logcat.
 - It steps aside rather than queue behind a stream start, and backs off for
   3 seconds after any failed read or write.
 

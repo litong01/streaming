@@ -416,6 +416,9 @@ func (s *Server) pollAudio() bool {
 		return false
 	}
 	if applied {
+		meter := max(state.LeftLevelTenths, state.RightLevelTenths)
+		log.Printf("auto volume: gain %d -> %d tenths, meter %d, %s",
+			current, decision.GainTenths, meter, decision.Note)
 		s.recordAutoGain(current, decision.GainTenths)
 	}
 	return true
