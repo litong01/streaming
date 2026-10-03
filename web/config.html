@@ -195,12 +195,19 @@
         smpPassword: document.getElementById("smpPassword").value,
         httpPort: Number(document.getElementById("httpPort").value)
       };
-      const response = await fetch("/api/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      const data = await response.json();
+      let response;
+      let data;
+      try {
+        response = await fetch("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        data = await response.json();
+      } catch (error) {
+        saveMessage.textContent = "Save failed: " + error;
+        return;
+      }
       if (response.ok) {
         saveMessage.textContent = "Saved. Server listening on port " + data.httpPort + ".";
         document.getElementById("smpPassword").value = "";

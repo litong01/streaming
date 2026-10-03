@@ -23,7 +23,6 @@ import (
 const (
 	audioPollInterval = 500 * time.Millisecond
 	audioErrorBackoff = 3 * time.Second
-	audioStaleAfter   = 3 * time.Second
 )
 
 type Server struct {
@@ -68,10 +67,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		cfg := s.store.Get()
 		addr := fmt.Sprintf(":%d", cfg.HTTPPort)
 		handler := s.routes()
+		// No WriteTimeout: the preview is an endless response.
 		httpServer := &http.Server{
 			Addr:              addr,
 			Handler:           handler,
 			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			IdleTimeout:       2 * time.Minute,
+			MaxHeaderBytes:    64 << 10,
 		}
 
 		s.mu.Lock()
@@ -126,9 +129,11 @@ func (s *Server) startPoller(ctx context.Context) {
 			if interval <= 0 {
 				interval = 3 * time.Second
 			}
-			if state, polled := s.client.QueryState(cfg); polled {
-				s.setState(state)
-			}
+			survive("status poll", func() {
+				if state, polled := s.client.QueryState(cfg); polled {
+					s.setState(state)
+				}
+			})
 
 			select {
 			case <-ctx.Done():
@@ -139,7 +144,25 @@ func (s *Server) startPoller(ctx context.Context) {
 	}()
 }
 
+// survive keeps one bad poll from taking the whole server down. Nobody is
+// watching the tablet, and the HTTP server already recovers its own handlers.
+func survive(what string, poll func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("%s panicked: %v", what, r)
+		}
+	}()
+	poll()
+}
+
+// The control API has no login, so without this any web page open on a
+// device that can reach this server could start or stop a stream, or rewrite
+// the configuration, by posting to it in the background. Reads stay open.
 func (s *Server) routes() http.Handler {
+	return http.NewCrossOriginProtection().Handler(s.mux())
+}
+
+func (s *Server) mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleControl)
 	mux.HandleFunc("/config", s.handleConfigPage)
@@ -329,7 +352,9 @@ type audioPayload struct {
 }
 
 // writeAudioState answers from the last reading rather than asking the SMP,
-// so a page polling twice a second adds nothing to the unit's load.
+// so a page polling twice a second adds nothing to the unit's load. A reading
+// is never too old to show: polls are only skipped while a stream start holds
+// the unit, and a read that hangs ends in an error rather than a gap.
 func (s *Server) writeAudioState(w http.ResponseWriter) {
 	autoVolume := s.store.Get().AutoVolume
 	s.audioMu.Lock()
@@ -341,8 +366,6 @@ func (s *Server) writeAudioState(w http.ResponseWriter) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 	case at.IsZero():
 		w.WriteHeader(http.StatusNoContent)
-	case time.Since(at) > audioStaleAfter:
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the SMP's audio reading is out of date"})
 	default:
 		writeJSON(w, http.StatusOK, audioPayload{AudioState: state, AutoVolume: autoVolume, AutoNote: note})
 	}
@@ -351,10 +374,12 @@ func (s *Server) writeAudioState(w http.ResponseWriter) {
 func (s *Server) startAudioPoller(ctx context.Context) {
 	go func() {
 		for {
-			wait := audioPollInterval
-			if !s.pollAudio() {
-				wait = audioErrorBackoff
-			}
+			wait := audioErrorBackoff
+			survive("audio poll", func() {
+				if s.pollAudio() {
+					wait = audioPollInterval
+				}
+			})
 			select {
 			case <-ctx.Done():
 				return
@@ -373,28 +398,14 @@ func (s *Server) pollAudio() bool {
 	if !polled {
 		return true
 	}
-	now := time.Now()
-	s.audioMu.Lock()
 	if err != nil {
+		s.audioMu.Lock()
 		s.audioErr = err
 		s.audioMu.Unlock()
 		return false
 	}
-	s.audio, s.audioAt, s.audioErr = state, now, nil
-	if !cfg.AutoVolume {
-		s.audioMu.Unlock()
-		return true
-	}
 	current := (state.LeftGainTenths + state.RightGainTenths) / 2
-	decision := s.auto.Observe(autovolume.Reading{
-		At:               now,
-		LeftLevelTenths:  state.LeftLevelTenths,
-		RightLevelTenths: state.RightLevelTenths,
-		GainTenths:       current,
-		Muted:            state.Muted,
-	})
-	s.autoNote = decision.Note
-	s.audioMu.Unlock()
+	decision := s.recordAudio(cfg, state, current)
 
 	if !decision.Change || !s.store.Get().AutoVolume {
 		return true
@@ -404,15 +415,37 @@ func (s *Server) pollAudio() bool {
 		log.Printf("auto volume: set gain to %d tenths: %v", decision.GainTenths, err)
 		return false
 	}
-	if !applied {
-		return true
+	if applied {
+		s.recordAutoGain(current, decision.GainTenths)
 	}
-	s.audioMu.Lock()
-	s.auto.Applied(time.Now(), current, decision.GainTenths)
-	s.audio.LeftGainTenths = decision.GainTenths
-	s.audio.RightGainTenths = decision.GainTenths
-	s.audioMu.Unlock()
 	return true
+}
+
+func (s *Server) recordAudio(cfg config.Config, state smp.AudioState, current int) autovolume.Decision {
+	now := time.Now()
+	s.audioMu.Lock()
+	defer s.audioMu.Unlock()
+	s.audio, s.audioAt, s.audioErr = state, now, nil
+	if !cfg.AutoVolume {
+		return autovolume.Decision{}
+	}
+	decision := s.auto.Observe(autovolume.Reading{
+		At:               now,
+		LeftLevelTenths:  state.LeftLevelTenths,
+		RightLevelTenths: state.RightLevelTenths,
+		GainTenths:       current,
+		Muted:            state.Muted,
+	})
+	s.autoNote = decision.Note
+	return decision
+}
+
+func (s *Server) recordAutoGain(from, to int) {
+	s.audioMu.Lock()
+	defer s.audioMu.Unlock()
+	s.auto.Applied(time.Now(), from, to)
+	s.audio.LeftGainTenths = to
+	s.audio.RightGainTenths = to
 }
 
 func (s *Server) handleEnglish(w http.ResponseWriter, r *http.Request) {
@@ -480,16 +513,35 @@ func (s *Server) handleConfigTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	password, err := passwordFor(cfg, host, port, payload.SmpPassword)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	cfg.SmpHost = host
 	cfg.SmpPort = port
+	cfg.SmpPassword = password
 	if username := strings.TrimSpace(payload.SmpUsername); username != "" {
 		cfg.SmpUsername = username
 	}
-	// An empty box means "keep the saved password", matching the save path.
-	if payload.SmpPassword != "" {
-		cfg.SmpPassword = payload.SmpPassword
-	}
 	writeJSON(w, http.StatusOK, s.client.Diagnose(cfg))
+}
+
+// passwordFor reads an empty password box as "keep the saved password", but
+// only while the address is the one it was saved for. Otherwise anyone who can
+// reach this page could point the address at a machine of their own and
+// collect the password from the next request sent there.
+func passwordFor(saved config.Config, host string, port int, typed string) (string, error) {
+	if typed != "" {
+		return typed, nil
+	}
+	if saved.SmpPassword == "" {
+		return "", nil
+	}
+	if !strings.EqualFold(saved.SmpHost, host) || saved.SmpPort != port {
+		return "", errors.New("enter the SMP password again for the new address")
+	}
+	return saved.SmpPassword, nil
 }
 
 func readConfigPayload(r *http.Request) (configPayload, error) {
@@ -524,12 +576,15 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	password, err := passwordFor(current, host, port, payload.SmpPassword)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	next.SmpHost = host
 	next.SmpPort = port
+	next.SmpPassword = password
 	next.SmpUsername = strings.TrimSpace(payload.SmpUsername)
-	if payload.SmpPassword != "" {
-		next.SmpPassword = payload.SmpPassword
-	}
 	next.HTTPPort = payload.HTTPPort
 	if next.HTTPPort == 0 {
 		next.HTTPPort = config.DefaultHTTPPort

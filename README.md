@@ -66,7 +66,10 @@ create a release.
    local server port (default `8080`). These are the same credentials as the
    SMP's own web page. The port is `443` unless you include a different one
    after the colon; `80` switches to plain HTTP.
-4. Save the configuration.
+4. Save the configuration. Leaving the password box empty keeps the saved
+   password, but only for the same address: change the address and the
+   password has to be typed again, so it is never sent to a machine it was not
+   meant for.
 5. Point Fully Kiosk Browser at `http://127.0.0.1:8080/`.
 
 If Fully Kiosk runs on another tablet, use
@@ -116,6 +119,16 @@ go build -o streaming .
 Its configuration is stored at
 `~/.config/streaming/config.json` with file mode `0600`. Override the path with
 the `STREAMING_CONFIG` environment variable.
+
+The file is flushed to storage on every save, so a power cut leaves the old
+settings or the new ones. If it is ever unreadable anyway, it is renamed to
+`config.json.unreadable` and the server starts from defaults, so the
+configuration page is there to fill in again rather than the server failing
+to start.
+
+The control API has no login, so it only accepts changes from its own pages:
+a start, stop, volume, or configuration request sent from a page served
+anywhere else is refused.
 
 ## Android build details
 

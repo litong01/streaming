@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -112,18 +113,12 @@ func LoadWithOptions(path string, options LoadOptions) (*Store, error) {
 		return nil, err
 	}
 	wasEncrypted := len(store.key) != 0 && hasEncryptedFileMagic(data)
-	if hasEncryptedFileMagic(data) {
-		if len(store.key) == 0 {
-			return nil, fmt.Errorf("encrypted configuration requires an encryption key")
-		}
-		data, err = decryptConfig(data, store.key)
-		if err != nil {
-			return nil, err
-		}
+	if hasEncryptedFileMagic(data) && len(store.key) == 0 {
+		return nil, fmt.Errorf("encrypted configuration requires an encryption key")
 	}
-	var loaded Config
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		return nil, err
+	loaded, err := decodeConfig(data, store.key)
+	if err != nil {
+		return store.startOver(err, options.InitialConfig)
 	}
 	store.cfg = loaded
 	needsSave := migrate(&store.cfg)
@@ -136,6 +131,41 @@ func LoadWithOptions(path string, options LoadOptions) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func decodeConfig(data, key []byte) (Config, error) {
+	var cfg Config
+	if hasEncryptedFileMagic(data) {
+		plain, err := decryptConfig(data, key)
+		if err != nil {
+			return cfg, err
+		}
+		data = plain
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return cfg, fmt.Errorf("parse configuration: %w", err)
+	}
+	return cfg, nil
+}
+
+// startOver sets an unreadable configuration aside and begins again from
+// defaults. Refusing to start would leave the tablet without a control page
+// at all, restarting forever, with nobody there to notice; this way the
+// configuration page is still there to fill in again.
+func (s *Store) startOver(cause error, initial *Config) (*Store, error) {
+	aside := s.path + ".unreadable"
+	log.Printf("configuration %s is unreadable (%v); moved to %s and starting from defaults", s.path, cause, aside)
+	if err := os.Rename(s.path, aside); err != nil {
+		return nil, fmt.Errorf("set aside unreadable configuration: %w", err)
+	}
+	s.cfg = Default()
+	if initial != nil {
+		s.cfg = withDefaults(*initial)
+	}
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func (s *Store) Get() Config {
@@ -182,14 +212,41 @@ func (s *Store) saveLocked() error {
 			return err
 		}
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := writeFileDurably(s.path, data); err != nil {
 		return err
 	}
 	return s.writeRuntimeLocked()
+}
+
+// writeFileDurably replaces a file so that a power cut leaves either the old
+// contents or the new, never an empty file: the tablet is expected to lose
+// power without warning. The data is flushed before the rename, and the
+// rename itself before returning.
+func writeFileDurably(path string, data []byte) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }
 
 func (s *Store) writeRuntimeLocked() error {
@@ -205,11 +262,7 @@ func (s *Store) writeRuntimeLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.runtimePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.runtimePath)
+	return writeFileDurably(s.runtimePath, data)
 }
 
 func hasEncryptedFileMagic(data []byte) bool {

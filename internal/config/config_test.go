@@ -206,7 +206,11 @@ func TestLoadEncryptsExistingPlaintextConfig(t *testing.T) {
 func TestEncryptedConfigRejectsTampering(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.bin")
 	key := bytes.Repeat([]byte{0x11}, 32)
-	if _, err := LoadWithOptions(path, LoadOptions{EncryptionKey: key}); err != nil {
+	initial := Default()
+	initial.SmpHost = "192.0.2.30"
+	initial.SmpUsername = "admin"
+	initial.SmpPassword = "secret"
+	if _, err := LoadWithOptions(path, LoadOptions{EncryptionKey: key, InitialConfig: &initial}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -217,7 +221,42 @@ func TestEncryptedConfigRejectsTampering(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadWithOptions(path, LoadOptions{EncryptionKey: key}); err == nil {
-		t.Fatal("expected tampered configuration to fail authentication")
+
+	store, err := LoadWithOptions(path, LoadOptions{EncryptionKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Get(); got.SmpHost != "" || got.SmpPassword != "" {
+		t.Fatalf("trusted a tampered configuration: %+v", got)
+	}
+	if aside, err := os.ReadFile(path + ".unreadable"); err != nil || !bytes.Equal(aside, data) {
+		t.Fatalf("tampered file was not kept aside: %v", err)
+	}
+}
+
+func TestLoadSurvivesAFileEmptiedByAPowerCut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Get().HTTPPort != DefaultHTTPPort {
+		t.Fatalf("did not start from defaults: %+v", store.Get())
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("defaults written after the power cut do not load: %v", err)
+	}
+}
+
+func TestParseHostPortRejectsHostsThatRewriteTheURL(t *testing.T) {
+	for _, address := range []string{
+		"evil.example/x", "user@evil.example", "smp?x=1", "smp#x", "192.0.2.10:80abc", "-smp", "smp..local",
+	} {
+		if _, _, err := ParseHostPort(address, 0); err == nil {
+			t.Fatalf("expected error for %q", address)
+		}
 	}
 }

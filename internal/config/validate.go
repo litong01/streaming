@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -55,7 +56,7 @@ func ParseHostPort(address string, explicitPort int) (string, int, error) {
 	}
 
 	host = strings.TrimSpace(host)
-	if host == "" || len(host) > maxHostLen {
+	if host == "" || len(host) > maxHostLen || !validHost(host) {
 		return "", 0, fmt.Errorf("invalid SMP host")
 	}
 	if port < 1 || port > maxPort {
@@ -85,11 +86,31 @@ func (c Config) Validate() error {
 }
 
 func parsePort(value string) (int, error) {
-	var port int
-	if _, err := fmt.Sscanf(value, "%d", &port); err != nil || port < 1 || port > maxPort {
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > maxPort {
 		return 0, fmt.Errorf("SMP port must be between 1 and %d", maxPort)
 	}
 	return port, nil
+}
+
+// validHost accepts an IP address or a DNS name and nothing else. The host is
+// pasted straight into the SMP's URL, so a "/", "@", or "?" would quietly send
+// requests, and the credentials with them, somewhere other than it appears.
+func validHost(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func containsControl(value string) bool {
