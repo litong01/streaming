@@ -1,6 +1,5 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -74,18 +73,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         viewBinding = true
-    }
-
-    sourceSets {
-        getByName("main") {
-            jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
-        }
     }
 
     packaging {
@@ -98,26 +87,33 @@ android {
     }
 }
 
-val buildAndroidGoServer by tasks.registering(Exec::class) {
+abstract class BuildAndroidGoServer : Exec() {
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+}
+
+val buildAndroidGoServer = tasks.register<BuildAndroidGoServer>("buildAndroidGoServer") {
     group = "build"
-	description = "Cross-compiles the Go control server for Android ARM64"
+    description = "Cross-compiles the Go control server for Android ARM64"
     workingDir(rootProject.projectDir)
+    outputDirectory.set(layout.buildDirectory.dir("generated/jniLibs"))
     commandLine("bash", rootProject.file("scripts/build-android-go.sh").absolutePath)
 
-	inputs.files(
-		rootProject.fileTree(".") {
-			include("*.go", "go.mod", "go.sum")
-			include("internal/**/*.go", "web/**", "scripts/build-android-go.sh")
-			exclude("app/**", "build/**")
-		},
-	)
-    outputs.files(
-        layout.buildDirectory.file("generated/jniLibs/arm64-v8a/libstreaming.so"),
+    inputs.files(
+        rootProject.fileTree(".") {
+            include("*.go", "go.mod", "go.sum")
+            include("internal/**/*.go", "web/**", "scripts/build-android-go.sh")
+            exclude("app/**", "build/**")
+        },
     )
 }
 
-tasks.named("preBuild").configure {
-    dependsOn(buildAndroidGoServer)
+androidComponents {
+    onVariants { variant ->
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(buildAndroidGoServer) { task ->
+            task.outputDirectory
+        }
+    }
 }
 
 dependencies {
