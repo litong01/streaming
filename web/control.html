@@ -589,22 +589,6 @@
       min-height: 1.15rem;
     }
 
-    #footer {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      padding: 0 24px 22px;
-    }
-
-    #footer a {
-      color: rgba(232, 234, 237, 0.45);
-      font-size: 0.9rem;
-      text-decoration: none;
-    }
-
-    #footer a + a { margin-left: 22px; }
-
     @media (orientation: portrait) {
       :root {
         --tile: 118px;
@@ -776,11 +760,6 @@
       <div id="statusError" class="error"></div>
     </div>
   </main>
-
-  <div id="footer">
-    <a href="/avcontrol">AV System</a>
-    <a href="/config">Configuration</a>
-  </div>
 
   <script>
     const header = document.getElementById("header");

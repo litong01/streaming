@@ -93,7 +93,7 @@
 
     .powers {
       display: flex;
-      gap: 64px;
+      gap: 128px;
       align-items: flex-start;
       justify-content: center;
     }
@@ -203,23 +203,73 @@
       opacity: 0.38;
     }
 
-    #footer {
+    .confirm {
       position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      padding: 0 24px 22px;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(8, 8, 10, 0.72);
     }
 
-    #footer a {
-      color: rgba(232, 234, 237, 0.45);
-      font-size: 0.9rem;
-      text-decoration: none;
+    .confirm[hidden] { display: none; }
+
+    .confirm-card {
+      width: min(28rem, 100%);
+      padding: 28px 28px 24px;
+      border-radius: 28px;
+      border: 1px solid var(--ring);
+      background:
+        radial-gradient(circle at 50% 0%, #2a303a 0%, #16181d 55%, #101114 100%);
+      box-shadow: 0 24px 50px rgba(0, 0, 0, 0.45);
+    }
+
+    .confirm-question {
+      margin: 0 0 22px;
+      font-size: clamp(1.25rem, 2.8vw, 1.6rem);
+      font-weight: 500;
+      letter-spacing: -0.02em;
+    }
+
+    .confirm-actions {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+    }
+
+    .confirm-actions button {
+      min-width: 148px;
+      height: 48px;
+      padding: 0 18px;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: 1rem;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .confirm-cancel {
+      border: 1px solid var(--ring);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+    }
+
+    .confirm-yes {
+      border: 0;
+      background: var(--accent);
+      color: #0b0b0c;
+      font-weight: 500;
+    }
+
+    .confirm-yes.danger {
+      background: var(--warn);
     }
 
     @media (max-width: 720px), (max-height: 760px) {
       :root { --power: 168px; }
-      .powers { gap: 36px; }
+      .powers { gap: 80px; }
       .ring { border-width: 11px; }
       .status { margin-bottom: 18px; }
       .delay { margin-top: 22px; }
@@ -260,8 +310,14 @@
     </div>
     <button id="delay" class="delay" type="button">Delay Shutdown</button>
   </main>
-  <div id="footer">
-    <a href="/">Streaming</a>
+  <div id="confirm" class="confirm" hidden>
+    <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmQuestion">
+      <p id="confirmQuestion" class="confirm-question"></p>
+      <div class="confirm-actions">
+        <button id="confirmCancel" class="confirm-cancel" type="button">Cancel</button>
+        <button id="confirmYes" class="confirm-yes" type="button">Turn on</button>
+      </div>
+    </div>
   </div>
   <script>
     const header = document.getElementById("header");
@@ -271,6 +327,11 @@
     const onButton = document.getElementById("on");
     const offButton = document.getElementById("off");
     const delayButton = document.getElementById("delay");
+    const confirmLayer = document.getElementById("confirm");
+    const confirmQuestion = document.getElementById("confirmQuestion");
+    const confirmCancel = document.getElementById("confirmCancel");
+    const confirmYes = document.getElementById("confirmYes");
+    let pending = null;
 
     function pad(value) {
       return value < 10 ? "0" + value : String(value);
@@ -412,9 +473,45 @@
       }
     }
 
-    onButton.addEventListener("click", () => post("/api/avcontrol/on"));
-    offButton.addEventListener("click", () => post("/api/avcontrol/off"));
+    function ask(action) {
+      pending = action;
+      confirmQuestion.textContent = action.question;
+      confirmYes.textContent = action.label;
+      confirmYes.classList.toggle("danger", action.danger);
+      confirmLayer.hidden = false;
+      confirmCancel.focus();
+    }
+
+    function dismiss() {
+      pending = null;
+      confirmLayer.hidden = true;
+    }
+
+    onButton.addEventListener("click", () => ask({
+      path: "/api/avcontrol/on",
+      question: "Turn the AV system on?",
+      label: "Turn on",
+      danger: false,
+    }));
+    offButton.addEventListener("click", () => ask({
+      path: "/api/avcontrol/off",
+      question: "Turn the AV system off?",
+      label: "Turn off",
+      danger: true,
+    }));
     delayButton.addEventListener("click", () => post("/api/avcontrol/delay"));
+    confirmCancel.addEventListener("click", dismiss);
+    confirmYes.addEventListener("click", () => {
+      const action = pending;
+      dismiss();
+      if (action) post(action.path);
+    });
+    confirmLayer.addEventListener("click", (event) => {
+      if (event.target === confirmLayer) dismiss();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !confirmLayer.hidden) dismiss();
+    });
 
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) tickClock();
