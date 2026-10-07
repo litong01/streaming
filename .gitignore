@@ -1,6 +1,7 @@
 /bin/
 /streaming
 /streaming.exe
+avcontrol/avcontrol.yaml
 *.json
 !go.mod
 !go.sum

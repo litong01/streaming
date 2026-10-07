@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AV System Control</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0b0c;
+      --bg-soft: #141416;
+      --text: #e8eaed;
+      --text-dim: rgba(232, 234, 237, 0.72);
+      --ring: rgba(255, 255, 255, 0.09);
+      --accent: #8ab4f8;
+      --warn: #f28b82;
+      --power: 220px;
+      --font: "Google Sans", Roboto, system-ui, -apple-system, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      text-align: center;
+      background:
+        radial-gradient(1200px 700px at 50% 38%, #1a1d24 0%, transparent 62%),
+        radial-gradient(900px 500px at 50% 100%, rgba(138, 180, 248, 0.06) 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    #header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 2;
+      padding: 28px 24px 0;
+      pointer-events: none;
+    }
+
+    .clock {
+      font-size: clamp(2.4rem, 6vw, 3.4rem);
+      font-weight: 300;
+      letter-spacing: -0.03em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .date {
+      margin-top: 8px;
+      font-size: clamp(0.95rem, 2.2vw, 1.1rem);
+      color: var(--text-dim);
+    }
+
+    main {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: var(--header-space, 116px) 24px 72px;
+      gap: 8px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(1.6rem, 3.2vw, 2.15rem);
+      font-weight: 500;
+      letter-spacing: -0.02em;
+    }
+
+    .status {
+      min-height: 1.6rem;
+      max-width: 40rem;
+      margin: 0 0 28px;
+      font-size: clamp(1rem, 2.4vw, 1.25rem);
+      line-height: 1.35;
+      color: var(--text-dim);
+    }
+
+    .status.problem { color: var(--warn); }
+
+    .powers {
+      display: flex;
+      gap: 64px;
+      align-items: flex-start;
+      justify-content: center;
+    }
+
+    .power {
+      width: var(--power);
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--text-dim);
+      font-family: inherit;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .power:active { transform: scale(0.97); }
+
+    .power:disabled {
+      cursor: not-allowed;
+      opacity: 0.38;
+    }
+
+    .power:disabled:active { transform: none; }
+
+    .ring {
+      display: grid;
+      place-items: center;
+      width: var(--power);
+      height: var(--power);
+      border-radius: 50%;
+      border: 14px solid #3a404a;
+      background:
+        radial-gradient(circle at 50% 38%, #3a404a 0%, #1c1f25 62%, #121316 100%);
+      box-shadow:
+        0 24px 50px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      transition: border-color 180ms ease, box-shadow 180ms ease;
+    }
+
+    .disc {
+      display: grid;
+      place-items: center;
+      width: 68%;
+      height: 68%;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 50% 30%, #454b57 0%, #22262e 46%, #101114 78%);
+      box-shadow:
+        0 14px 28px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    }
+
+    .glyph {
+      width: 42%;
+      height: 42%;
+      fill: none;
+      stroke: #d5d8de;
+      stroke-width: 1.7;
+      stroke-linecap: round;
+    }
+
+    .caption {
+      display: block;
+      margin-top: 14px;
+      font-size: 1.2rem;
+      letter-spacing: 0.01em;
+    }
+
+    .power.lit { color: var(--text); }
+
+    .power.lit .ring {
+      border-color: rgba(138, 180, 248, 0.72);
+      box-shadow:
+        0 24px 50px rgba(0, 0, 0, 0.45),
+        0 0 0 1px rgba(138, 180, 248, 0.35),
+        0 0 36px rgba(138, 180, 248, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+
+    .power.lit .glyph { stroke: var(--accent); }
+
+    .power.working .ring {
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      50% { box-shadow: 0 24px 50px rgba(0, 0, 0, 0.45), 0 0 28px rgba(138, 180, 248, 0.12); }
+    }
+
+    .delay {
+      margin-top: 34px;
+      min-width: 168px;
+      height: 46px;
+      padding: 0 18px;
+      border-radius: 999px;
+      border: 1px solid var(--ring);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.98rem;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .delay:disabled {
+      cursor: not-allowed;
+      opacity: 0.38;
+    }
+
+    #footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 0 24px 22px;
+    }
+
+    #footer a {
+      color: rgba(232, 234, 237, 0.45);
+      font-size: 0.9rem;
+      text-decoration: none;
+    }
+
+    @media (max-width: 720px), (max-height: 760px) {
+      :root { --power: 168px; }
+      .powers { gap: 36px; }
+      .ring { border-width: 11px; }
+      .status { margin-bottom: 18px; }
+      .delay { margin-top: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <div id="clock" class="clock">--:--:--</div>
+    <div id="date" class="date"></div>
+  </div>
+  <main>
+    <h1>AV System Control</h1>
+    <p id="status" class="status" role="status">Loading…</p>
+    <div class="powers">
+      <button id="on" class="power" type="button">
+        <span class="ring" aria-hidden="true">
+          <span class="disc">
+            <svg class="glyph" viewBox="0 0 24 24">
+              <path d="M12 3.2v6.3"/>
+              <path d="M7.05 6.55a7.1 7.1 0 1 0 9.9 0"/>
+            </svg>
+          </span>
+        </span>
+        <span class="caption">On</span>
+      </button>
+      <button id="off" class="power" type="button">
+        <span class="ring" aria-hidden="true">
+          <span class="disc">
+            <svg class="glyph" viewBox="0 0 24 24">
+              <path d="M12 3.2v6.3"/>
+              <path d="M7.05 6.55a7.1 7.1 0 1 0 9.9 0"/>
+            </svg>
+          </span>
+        </span>
+        <span class="caption">Off</span>
+      </button>
+    </div>
+    <button id="delay" class="delay" type="button">Delay Shutdown</button>
+  </main>
+  <div id="footer">
+    <a href="/">Streaming</a>
+  </div>
+  <script>
+    const header = document.getElementById("header");
+    const clock = document.getElementById("clock");
+    const date = document.getElementById("date");
+    const status = document.getElementById("status");
+    const onButton = document.getElementById("on");
+    const offButton = document.getElementById("off");
+    const delayButton = document.getElementById("delay");
+
+    function pad(value) {
+      return value < 10 ? "0" + value : String(value);
+    }
+
+    function reserveHeaderSpace() {
+      const space = Math.ceil(header.getBoundingClientRect().height) + 24;
+      document.documentElement.style.setProperty("--header-space", space + "px");
+    }
+
+    let shownDate = "";
+
+    function updateClock() {
+      const now = new Date();
+      clock.textContent =
+        pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+      const today = now.toLocaleDateString(undefined, {
+        weekday: "long",
+        month: "long",
+        day: "numeric"
+      });
+      if (today !== shownDate) {
+        shownDate = today;
+        date.textContent = today;
+      }
+    }
+
+    let clockTimer = 0;
+
+    function tickClock() {
+      updateClock();
+      const untilNextSecond = 1000 - (new Date().getMilliseconds());
+      clearTimeout(clockTimer);
+      clockTimer = setTimeout(tickClock, untilNextSecond + 20);
+    }
+
+    let shownErrors = [];
+    let errorIndex = 0;
+    let errorTimer = 0;
+
+    function sameList(left, right) {
+      if (left.length !== right.length) return false;
+      for (let i = 0; i < left.length; i += 1) {
+        if (left[i] !== right[i]) return false;
+      }
+      return true;
+    }
+
+    function showError() {
+      const count = shownErrors.length;
+      if (count === 0) return;
+      const current = shownErrors[errorIndex % count];
+      status.textContent = count === 1
+        ? "Needs attention · " + current
+        : "Needs attention · " + ((errorIndex % count) + 1) + " of " + count + " · " + current;
+    }
+
+    function rotateErrors() {
+      errorTimer = 0;
+      if (shownErrors.length < 2) return;
+      errorIndex = (errorIndex + 1) % shownErrors.length;
+      showError();
+      armErrorRotation();
+    }
+
+    function armErrorRotation() {
+      if (errorTimer || shownErrors.length < 2) return;
+      errorTimer = setTimeout(rotateErrors, 3500);
+    }
+
+    function paint(data) {
+      const phase = data.phase || "off";
+      const errors = Array.isArray(data.errors) ? data.errors : [];
+      if (!data.busy && errors.length > 0) {
+        if (!sameList(errors, shownErrors)) {
+          shownErrors = errors.slice();
+          errorIndex = 0;
+          clearTimeout(errorTimer);
+          errorTimer = 0;
+        }
+        showError();
+        armErrorRotation();
+      } else {
+        shownErrors = [];
+        clearTimeout(errorTimer);
+        errorTimer = 0;
+        status.textContent = data.status || "AV control is not configured";
+      }
+      status.classList.toggle("problem", errors.length > 0 || Boolean(data.error) || !data.configured);
+      const litOn = phase === "on" || phase === "starting" || phase === "partial" || data.held;
+      const litOff = phase === "off" || phase === "stopping";
+      onButton.classList.toggle("lit", litOn);
+      offButton.classList.toggle("lit", litOff);
+      onButton.classList.toggle("working", phase === "starting");
+      offButton.classList.toggle("working", phase === "stopping");
+      const onLocked = data.onLockedUntil && Date.parse(data.onLockedUntil) > Date.now();
+      const offLocked = data.offLockedUntil && Date.parse(data.offLockedUntil) > Date.now();
+      onButton.disabled = !data.configured || phase === "starting" || onLocked;
+      offButton.disabled = !data.configured || phase === "stopping" || offLocked;
+      delayButton.disabled = !data.configured;
+    }
+
+    async function readJson(response) {
+      const data = await response.json();
+      if (!response.ok || data.error && !data.status) {
+        throw new Error(data.error || "request failed");
+      }
+      return data;
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch("/api/avcontrol/status", { cache: "no-store" });
+        paint(await readJson(response));
+      } catch (error) {
+        status.textContent = error.message;
+        status.classList.add("problem");
+      }
+    }
+
+    async function post(path) {
+      onButton.disabled = true;
+      offButton.disabled = true;
+      delayButton.disabled = true;
+      try {
+        const response = await fetch(path, { method: "POST" });
+        const data = await response.json();
+        if (!response.ok) {
+          status.textContent = data.error || "request failed";
+          status.classList.add("problem");
+          return;
+        }
+        paint(data);
+      } catch (error) {
+        status.textContent = error.message;
+        status.classList.add("problem");
+      } finally {
+        refresh();
+      }
+    }
+
+    onButton.addEventListener("click", () => post("/api/avcontrol/on"));
+    offButton.addEventListener("click", () => post("/api/avcontrol/off"));
+    delayButton.addEventListener("click", () => post("/api/avcontrol/delay"));
+
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) tickClock();
+    });
+    window.addEventListener("focus", tickClock);
+    window.addEventListener("pageshow", tickClock);
+    tickClock();
+    reserveHeaderSpace();
+    window.addEventListener("resize", reserveHeaderSpace);
+    window.addEventListener("orientationchange", reserveHeaderSpace);
+    if (window.ResizeObserver) {
+      new ResizeObserver(reserveHeaderSpace).observe(header);
+    }
+
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+# ============================================================
+# Church AV power — tablet server example configuration
+# Copy to avpower.yaml on the tablet and replace every value
+# marked REPLACE. Notes:
+# - Commands are absolute and idempotent: START = set ON,
+#   STOP = set OFF. Never toggle. Pressing START twice is safe.
+# - Real local keys live only in this file on the tablet.
+#   Never commit this file or paste keys into chat.
+# ============================================================
+
+server:
+  timezone: "America/New_York"
+  log_level: "info"
+
+control:
+  prefer_local: true              # LAN control at runtime if the switch supports it
+  cloud_fallback: true            # Tuya cloud only when local fails
+  command_mode: "absolute"        # set ON / set OFF only, never toggle
+
+# ------------------------------------------------------------
+# Switched loads: aeliussine DLQ-Wifi (ASIN B0FCMMZ7NT)
+# Device is a switch/meter only; the panel breaker remains the
+# protection. NOT switched: the network/PoE rack (always on).
+# ------------------------------------------------------------
+switches:
+  - id: "rr-video"
+    label: "Rack room — video processing (Crestron DM)"
+    device_id: "bf0000000000000001"     # REPLACE: from Smart Life / Tuya IoT console
+    ip: "192.168.1.61"                  # REPLACE: reserved DHCP address
+    local_key: "REPLACE_LOCAL_KEY"      # REPLACE: 16-char key from Tuya IoT console
+    protocol: "3.4"                     # REPLACE: 3.3 / 3.4 / 3.5 per device
+    circuit: "Rack room 20A"            # REPLACE: panel breaker label
+    power_restore: "off"                # must stay OFF after an outage until commanded
+
+  - id: "booth-control"
+    label: "Booth — ATEM + JVC controller"
+    device_id: "bf0000000000000002"     # REPLACE
+    ip: "192.168.1.62"                  # REPLACE
+    local_key: "REPLACE_LOCAL_KEY"
+    protocol: "3.4"
+    circuit: "Booth 20A (shared)"
+    power_restore: "off"
+
+  - id: "booth-audio"
+    label: "Booth — M32 mixer, recorder, Extron SMP 351"
+    device_id: "bf0000000000000003"     # REPLACE
+    ip: "192.168.1.63"                  # REPLACE
+    local_key: "REPLACE_LOCAL_KEY"
+    protocol: "3.4"
+    circuit: "Booth 20A (shared)"
+    power_restore: "off"
+
+  - id: "amp-1"
+    label: "Amplifier 1"
+    device_id: "bf0000000000000004"     # REPLACE
+    ip: "192.168.1.64"                  # REPLACE
+    local_key: "REPLACE_LOCAL_KEY"
+    protocol: "3.4"
+    circuit: "Rack room 20A, amp feed 1"
+    power_restore: "off"
+
+  - id: "amp-2"
+    label: "Amplifier 2"
+    device_id: "bf0000000000000005"     # REPLACE
+    ip: "192.168.1.65"                  # REPLACE
+    local_key: "REPLACE_LOCAL_KEY"
+    protocol: "3.4"
+    circuit: "Rack room 20A, amp feed 2"
+    power_restore: "off"
+
+  - id: "amp-3"
+    label: "Amplifier 3"
+    device_id: "bf0000000000000006"     # REPLACE
+    ip: "192.168.1.66"                  # REPLACE
+    local_key: "REPLACE_LOCAL_KEY"
+    protocol: "3.4"
+    circuit: "Rack room 20A, amp feed 3"
+    power_restore: "off"
+
+  - id: "amp-4"
+    label: "Amplifier 4"
+    device_id: "bf0000000000000007"     # REPLACE
+    ip: "192.168.1.67"                  # REPLACE
+    local_key: "REPLACE_LOCAL_KEY"
+    protocol: "3.4"
+    circuit: "Rack room 20A, amp feed 4"
+    power_restore: "off"
+
+# ------------------------------------------------------------
+# Power sequence. Shutdown runs the exact reverse (amps first
+# off). Each switch feeds its existing power sequencer, whose
+# maintained start button stays ON.
+# ------------------------------------------------------------
+startup:
+  - { switch: "rr-video",      settle_sec: 20 }
+  - { switch: "booth-control", settle_sec: 10 }
+  - { switch: "booth-audio",   settle_sec: 30 }   # audio processor settles before amps
+  - { wake_macs: true,         settle_sec: 0  }
+  - { switch: "amp-1",         settle_sec: 5 }
+  - { switch: "amp-2",         settle_sec: 5 }
+  - { switch: "amp-3",         settle_sec: 5 }
+  - { switch: "amp-4",         settle_sec: 0 }
+
+shutdown: "reverse_of_startup"
+
+# ------------------------------------------------------------
+# Booth Macs: never switched. They stay on wall AC with wired
+# Ethernet and reserved addresses; the server only wakes and
+# sleeps them. Remote Login restricted to the AV account; the
+# server's PUBLIC key is in each Mac's authorized_keys. Only
+# the key FILE PATH appears here — never key material.
+# ------------------------------------------------------------
+macs:
+  - name: "Booth Mac 1"
+    mac_address: "AA:BB:CC:DD:EE:01"    # REPLACE: for Wake-on-LAN
+    ip: "192.168.1.51"                  # REPLACE: reserved address
+    ssh_user: "av"                      # REPLACE
+    ssh_key_file: "/sdcard/avpower/keys/mac1_key"   # protected file on the tablet
+    wake_attempts: 3
+    wake_timeout_sec: 90        # no answer after retries: skip, report partial
+
+  - name: "Booth Mac 2"
+    mac_address: "AA:BB:CC:DD:EE:02"    # REPLACE
+    ip: "192.168.1.52"                  # REPLACE
+    ssh_user: "av"
+    ssh_key_file: "/sdcard/avpower/keys/mac2_key"
+    wake_attempts: 3
+    wake_timeout_sec: 90
+
+# ------------------------------------------------------------
+# Schedule. Weekday-flexible; nothing is hardcoded to Sunday.
+# A shutdown time already past when the day rolls over is
+# consumed and ignored — the page displays the next future
+# OFF, never a stale one. "DELAY OFF +1 HOUR" on the page
+# pushes the current session's displayed OFF out by one step.
+# ------------------------------------------------------------
+schedule:
+  sunday:    { on: "08:00", off: "14:00" }
+  monday:    { on: null,    off: null }
+  tuesday:   { on: null,    off: null }
+  wednesday: { on: null,    off: null }
+  thursday:  { on: null,    off: null }
+  friday:    { on: null,    off: null }
+  saturday:  { on: null,    off: null }
+
+  # Safety net, every day: if the system is still on at this
+  # time, shut it down (guarded, see below).
+  ensure_off_daily: "17:00"
+
+off_delay:
+  step_minutes: 60              # one press of DELAY OFF = +1 hour
+
+# ------------------------------------------------------------
+# Guarded shutdown: a scheduled OFF (or the 17:00 safety net)
+# never blindly kills a live service. If a guard reports
+# activity, the OFF is held and re-checked; STOP NOW on the
+# page always executes immediately.
+# ------------------------------------------------------------
+guards:
+  before_scheduled_off:
+    - stream_active             # Extron SMP 351 streaming
+    - recording_active          # recorder running
+  on_guard_active: "hold_off_and_recheck"
+  recheck_minutes: 5
+  stop_now_overrides_guards: true
+
+# ------------------------------------------------------------
+# Tablet. Default (simplified): the server stays awake and
+# plugged in, screen dimmed — the tablet draws little next to
+# the AV load. The wake_window below is OPTIONAL duty-cycling.
+# It only MIRRORS the tablet/Fully Kiosk scheduled on/off
+# setting so the app can display its expected awake window;
+# the app cannot read the manufacturer's schedule. Keep the
+# two in sync by hand when either changes.
+# ------------------------------------------------------------
+tablet:
+  keep_awake: true
+  screen_dim: true
+  wake_window:                  # optional; mirrors tablet setting
+    sunday:  { wake: "07:30", sleep: "15:00" }
+    default: { wake: "07:30", sleep: "18:00" }
+
+# ------------------------------------------------------------
+# Smart Life: the switches stay registered here first (ideally
+# under a church-owned account), because Smart Life remains
+# the per-device remote fallback and settings surface. The
+# church Home is SHARED to personal accounts — Smart Life has
+# no quick account switcher. These scenes are the manual
+# fallback if the server is ever down, and the remote OFF path.
+# ------------------------------------------------------------
+smart_life:
+  account: "church@example.com"          # REPLACE
+  home_name: "Church AV"
+  shared_to: ["tong-personal"]           # REPLACE with account labels
+  scenes: ["Church Power ON", "Church Power OFF"]
+
+developer.tuya.com:
+  project_code: "1234567890"
+  access_id: "1234567890"
+  access_secret: "1234567890"

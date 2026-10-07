@@ -141,3 +141,23 @@ func TestAutoVolumeIsSavedAndBlocksTheFaders(t *testing.T) {
 		t.Fatal("auto volume still saved as on")
 	}
 }
+
+func TestAVControlPageAndActions(t *testing.T) {
+	s := newTestServer(t)
+	if rec := get(t, s, "/avcontrol"); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing page status %d", rec.Code)
+	}
+	s.pages.AV = []byte("<h1>AV System Control</h1>")
+	if rec := get(t, s, "/avcontrol"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "AV System Control") {
+		t.Fatalf("page status %d body %s", rec.Code, rec.Body.String())
+	}
+	if rec := get(t, s, "/api/avcontrol/status"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "not configured") {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/avcontrol/on", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("on without a controller: %d", rec.Code)
+	}
+}

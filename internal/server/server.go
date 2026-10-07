@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"streaming/internal/autovolume"
+	"streaming/internal/avcontrol"
 	"streaming/internal/config"
 	"streaming/internal/smp"
 )
@@ -41,11 +42,13 @@ type Server struct {
 	audioErr error
 	auto     *autovolume.Controller
 	autoNote string
+	av       *avcontrol.Controller
 }
 
 type Pages struct {
 	Control []byte
 	Config  []byte
+	AV      []byte
 }
 
 func New(store *config.Store, client *smp.Client, pages Pages) *Server {
@@ -177,7 +180,20 @@ func (s *Server) mux() *http.ServeMux {
 	mux.HandleFunc("/api/stream/english", s.handleEnglish)
 	mux.HandleFunc("/api/stream/mandarin", s.handleMandarin)
 	mux.HandleFunc("/api/stream/stop", s.handleStop)
+	mux.HandleFunc("/avcontrol", s.handleAVPage)
+	mux.HandleFunc("/api/avcontrol/status", s.handleAVStatus)
+	mux.HandleFunc("/api/avcontrol/on", s.handleAVOn)
+	mux.HandleFunc("/api/avcontrol/off", s.handleAVOff)
+	mux.HandleFunc("/api/avcontrol/delay", s.handleAVDelay)
 	return mux
+}
+
+func (s *Server) AttachAV(av *avcontrol.Controller) {
+	s.av = av
+}
+
+func (s *Server) StreamActive() bool {
+	return s.getState().Streaming
 }
 
 // handlePreview relays the SMP's own live preview to the browser. The unit

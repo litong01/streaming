@@ -11,12 +11,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"streaming/internal/avcontrol"
 	"streaming/internal/config"
 	"streaming/internal/server"
 	"streaming/internal/smp"
 )
 
-//go:embed web/control.html web/config.html
+//go:embed web/control.html web/config.html web/avcontrol.html
 var webFS embed.FS
 
 func main() {
@@ -50,14 +51,24 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	avPage, err := webFS.ReadFile("web/avcontrol.html")
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	srv := server.New(store, smp.New(), server.Pages{
 		Control: control,
 		Config:  configPage,
+		AV:      avPage,
 	})
+	av := avcontrol.New(avcontrol.ResolvePath(), avcontrol.Options{
+		StreamActive: srv.StreamActive,
+	})
+	srv.AttachAV(av)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go av.Run(ctx)
 
 	if err := srv.ListenAndServe(ctx); err != nil && err != context.Canceled {
 		log.Fatal(err)
