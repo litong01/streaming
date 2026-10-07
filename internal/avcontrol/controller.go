@@ -44,15 +44,22 @@ type Options struct {
 	Commands        Commander
 	Now             func() time.Time
 	Sleep           func(context.Context, time.Duration) error
+	// Seed is avcontrol-seed.yaml. It is used only while the saved file is
+	// absent, and it is never written out as that file.
+	Seed []byte
 }
 
 // Controller runs the power sequences and the daily schedule on the streaming
 // server's own process.
 type Controller struct {
-	path string
+	path       string
+	seed       []byte
+	fromSeed   bool
+	seedFailed bool
 
 	mu            sync.Mutex
 	file          *File
+	source        []byte
 	mod           time.Time
 	problem       string
 	phase         string
@@ -96,6 +103,7 @@ func New(path string, opt Options) *Controller {
 	}
 	return &Controller{
 		path:            path,
+		seed:            append([]byte(nil), opt.Seed...),
 		phase:           phaseUnknown,
 		readErr:         map[string]string{},
 		cmdErr:          map[string]string{},
@@ -148,7 +156,9 @@ func (c *Controller) pass(ctx context.Context, announce bool) {
 	}()
 	c.reload()
 	if announce {
-		if c.configured() {
+		if c.usingSeed() {
+			log.Printf("av control: no saved file at %s, using avcontrol-seed.yaml", c.path)
+		} else if c.configured() {
 			log.Printf("av control: config %s", c.path)
 		} else {
 			log.Printf("av control: %s", c.problemText())
@@ -692,24 +702,73 @@ func (c *Controller) reload() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err != nil {
-		if c.file == nil {
-			c.problem = fmt.Sprintf("config file not found (%s)", c.path)
+		if !os.IsNotExist(err) {
+			if c.file == nil {
+				c.problem = fmt.Sprintf("config file not found (%s)", c.path)
+			}
+			return
 		}
+		c.loadSeedLocked()
 		return
+	}
+	if c.fromSeed {
+		c.fromSeed = false
+		c.mod = time.Time{}
 	}
 	if !info.ModTime().After(c.mod) && (c.file != nil || c.problem != "") {
 		return
 	}
-	file, err := Load(c.path)
+	data, err := os.ReadFile(c.path)
 	c.mod = info.ModTime()
+	if err != nil {
+		c.problem = fmt.Errorf("read av control config: %w", err).Error()
+		log.Printf("av control: %s", c.problem)
+		return
+	}
+	file, err := Parse(data)
 	if err != nil {
 		c.problem = err.Error()
 		log.Printf("av control: %s", c.problem)
 		return
 	}
+	c.source = data
+	c.applyLocked(file)
+}
+
+func (c *Controller) loadSeedLocked() {
+	if c.seedFailed || (c.fromSeed && c.file != nil) {
+		return
+	}
+	if len(c.seed) == 0 {
+		if c.file == nil {
+			c.problem = fmt.Sprintf("config file not found (%s)", c.path)
+		}
+		return
+	}
+	file, err := Parse(c.seed)
+	if err != nil {
+		c.fromSeed = false
+		c.seedFailed = true
+		c.problem = err.Error()
+		log.Printf("av control: %s", c.problem)
+		return
+	}
+	c.mod = time.Time{}
+	c.fromSeed = true
+	c.source = append([]byte(nil), c.seed...)
+	c.applyLocked(file)
+}
+
+func (c *Controller) applyLocked(file *File) {
 	c.file = file
 	c.problem = ""
 	c.commands.Use(file)
+}
+
+func (c *Controller) usingSeed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.fromSeed && c.file != nil
 }
 
 func (c *Controller) guardReason() string {

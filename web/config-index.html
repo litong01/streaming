@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Configuration</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0b0c;
+      --text: #e8eaed;
+      --muted: rgba(232, 234, 237, 0.72);
+      --accent: #8ab4f8;
+      --ring: rgba(255, 255, 255, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 700px at 50% 0%, #1a1d24 0%, transparent 62%),
+        var(--bg);
+      color: var(--text);
+      font-family: "Google Sans", Roboto, system-ui, -apple-system, sans-serif;
+      padding: 24px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .panel { width: min(640px, 100%); margin: 0 auto; }
+    h1 { font-size: 32px; font-weight: 300; letter-spacing: -0.02em; margin: 0 0 8px; }
+    .hint { color: var(--muted); margin-bottom: 28px; line-height: 1.5; }
+    nav { display: grid; gap: 12px; }
+    a {
+      display: flex;
+      align-items: center;
+      min-height: 64px;
+      padding: 0 22px;
+      border-radius: 999px;
+      border: 1px solid var(--ring);
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <h1>Configuration</h1>
+    <p class="hint">Choose which settings to change.</p>
+    <nav>
+      <a href="/config/streaming">Streaming</a>
+      <a href="/config/av">AV system control</a>
+    </nav>
+  </main>
+</body>
+</html>

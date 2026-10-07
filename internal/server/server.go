@@ -46,9 +46,11 @@ type Server struct {
 }
 
 type Pages struct {
-	Control []byte
-	Config  []byte
-	AV      []byte
+	Control     []byte
+	ConfigIndex []byte
+	Config      []byte
+	AVConfig    []byte
+	AV          []byte
 }
 
 func New(store *config.Store, client *smp.Client, pages Pages) *Server {
@@ -168,7 +170,9 @@ func (s *Server) routes() http.Handler {
 func (s *Server) mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleControl)
-	mux.HandleFunc("/config", s.handleConfigPage)
+	mux.HandleFunc("/config", s.handleConfigIndex)
+	mux.HandleFunc("/config/streaming", s.handleConfigPage)
+	mux.HandleFunc("/config/av", s.handleAVConfigPage)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfigAPI)
 	mux.HandleFunc("/api/config/test", s.handleConfigTest)
@@ -181,6 +185,8 @@ func (s *Server) mux() *http.ServeMux {
 	mux.HandleFunc("/api/stream/mandarin", s.handleMandarin)
 	mux.HandleFunc("/api/stream/stop", s.handleStop)
 	mux.HandleFunc("/avcontrol", s.handleAVPage)
+	mux.HandleFunc("/api/avcontrol/config", s.handleAVConfigAPI)
+	mux.HandleFunc("/api/avcontrol/config/test", s.handleAVConfigTest)
 	mux.HandleFunc("/api/avcontrol/status", s.handleAVStatus)
 	mux.HandleFunc("/api/avcontrol/on", s.handleAVOn)
 	mux.HandleFunc("/api/avcontrol/off", s.handleAVOff)
@@ -249,8 +255,36 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request) {
 	writeHTML(w, s.pages.Control)
 }
 
+func (s *Server) handleConfigIndex(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if len(s.pages.ConfigIndex) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	writeHTML(w, s.pages.ConfigIndex)
+}
+
 func (s *Server) handleConfigPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	writeHTML(w, s.pages.Config)
+}
+
+func (s *Server) handleAVConfigPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if len(s.pages.AVConfig) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	writeHTML(w, s.pages.AVConfig)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

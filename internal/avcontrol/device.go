@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -104,6 +105,50 @@ func (d *deviceClient) States(ctx context.Context, switches []Switch) map[string
 }
 
 func (d *deviceClient) readOne(ctx context.Context, sw Switch) (bool, error) {
+	on, _, err := d.reach(ctx, sw)
+	return on, err
+}
+
+// Reach is one switch as a connection check saw it. Via is "local" or "cloud"
+// when the read succeeded. Err is set when the switch could not be reached.
+type Reach struct {
+	On  bool
+	Via string
+	Err error
+}
+
+// Probe reads switches with the given file and reports which path answered.
+// It uses a separate client, so the controller's saved credentials stay put,
+// and it never sends a power command.
+func (d *deviceClient) Probe(ctx context.Context, file *File, switches []Switch) map[string]Reach {
+	fresh := newDeviceClient()
+	fresh.Use(file)
+	out := make(map[string]Reach, len(switches))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, sw := range switches {
+		wg.Add(1)
+		go func(sw Switch) {
+			defer wg.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					log.Printf("av control: %s probe recovered: %v", sw.ID, recovered)
+					mu.Lock()
+					out[sw.ID] = Reach{Err: fmt.Errorf("internal error")}
+					mu.Unlock()
+				}
+			}()
+			on, via, err := fresh.reach(ctx, sw)
+			mu.Lock()
+			out[sw.ID] = Reach{On: on, Via: via, Err: err}
+			mu.Unlock()
+		}(sw)
+	}
+	wg.Wait()
+	return out
+}
+
+func (d *deviceClient) reach(ctx context.Context, sw Switch) (bool, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	preferLocal, cloudFallback := d.preferLocal()
@@ -112,20 +157,25 @@ func (d *deviceClient) readOne(ctx context.Context, sw Switch) (bool, error) {
 	if preferLocal && localReady(sw) {
 		on, err := localRead(ctx, sw, dp)
 		if err == nil {
-			return on, nil
+			return on, "local", nil
 		}
 		localErr = err
 		if !cloudFallback {
-			return false, err
+			return false, "", err
 		}
 	} else if preferLocal && !cloudFallback {
-		return false, fmt.Errorf("no usable local key")
+		return false, "", fmt.Errorf("no usable local key")
+	} else if preferLocal {
+		localErr = fmt.Errorf("no usable local key")
 	}
 	on, err := d.cloud.readSwitch(ctx, sw.DeviceID)
 	if err != nil && localErr != nil {
-		return false, fmt.Errorf("local: %s; cloud: %s", shortErr(localErr), shortErr(err))
+		return false, "", fmt.Errorf("local: %s; cloud: %s", shortErr(localErr), cloudReason(err))
 	}
-	return on, err
+	if err != nil {
+		return false, "", err
+	}
+	return on, "cloud", nil
 }
 
 func (d *deviceClient) dp(ctx context.Context, sw Switch) string {
@@ -164,6 +214,14 @@ func dpForCode(code string) string {
 	default:
 		return "1"
 	}
+}
+
+func cloudReason(err error) string {
+	msg := shortErr(err)
+	if msg == "tuya cloud is not configured" {
+		return "not configured"
+	}
+	return strings.TrimPrefix(msg, "tuya cloud: ")
 }
 
 func onOff(on bool) string {

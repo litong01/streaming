@@ -103,6 +103,15 @@ func Load(path string) (*File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read av control config: %w", err)
 	}
+	return Parse(data)
+}
+
+// Parse reads a configuration document. The packaged seed and a saved file
+// go through the same checks.
+func Parse(data []byte) (*File, error) {
+	if len(data) > 1<<20 {
+		return nil, fmt.Errorf("read av control config: file is too large")
+	}
 	var file File
 	if err := yaml.Unmarshal(data, &file); err != nil {
 		return nil, fmt.Errorf("parse av control config: %w", err)

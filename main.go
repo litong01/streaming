@@ -17,7 +17,7 @@ import (
 	"streaming/internal/smp"
 )
 
-//go:embed web/control.html web/config.html web/avcontrol.html
+//go:embed web/control.html web/config.html web/config-index.html web/avconfig.html web/avcontrol.html avcontrol/avcontrol-seed.yaml
 var webFS embed.FS
 
 func main() {
@@ -47,7 +47,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	configIndex, err := webFS.ReadFile("web/config-index.html")
+	if err != nil {
+		log.Fatal(err)
+	}
 	configPage, err := webFS.ReadFile("web/config.html")
+	if err != nil {
+		log.Fatal(err)
+	}
+	avConfigPage, err := webFS.ReadFile("web/avconfig.html")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -57,12 +65,19 @@ func main() {
 	}
 
 	srv := server.New(store, smp.New(), server.Pages{
-		Control: control,
-		Config:  configPage,
-		AV:      avPage,
+		Control:     control,
+		ConfigIndex: configIndex,
+		Config:      configPage,
+		AVConfig:    avConfigPage,
+		AV:          avPage,
 	})
+	seed, err := webFS.ReadFile("avcontrol/avcontrol-seed.yaml")
+	if err != nil {
+		log.Fatal(err)
+	}
 	av := avcontrol.New(avcontrol.ResolvePath(), avcontrol.Options{
 		StreamActive: srv.StreamActive,
+		Seed:         seed,
 	})
 	srv.AttachAV(av)
 

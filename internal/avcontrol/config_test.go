@@ -49,11 +49,8 @@ func TestLoadRejectsAnOversizedFile(t *testing.T) {
 	}
 }
 
-func TestExampleFileParsesWhenPresent(t *testing.T) {
-	path := filepath.Join("..", "..", "avcontrol", "avcontrol.yaml")
-	if _, err := os.Stat(path); err != nil {
-		t.Skip("example config is not on this machine")
-	}
+func TestSeedFileParses(t *testing.T) {
+	path := filepath.Join("..", "..", "avcontrol", "avcontrol-seed.yaml")
 	if _, err := Load(path); err != nil {
 		t.Fatal(err)
 	}

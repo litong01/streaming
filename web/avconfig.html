@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AV system control</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0b0c;
+      --surface: #141416;
+      --text: #e8eaed;
+      --muted: rgba(232, 234, 237, 0.72);
+      --accent: #8ab4f8;
+      --ring: rgba(255, 255, 255, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 700px at 50% 0%, #1a1d24 0%, transparent 62%),
+        var(--bg);
+      color: var(--text);
+      font-family: "Google Sans", Roboto, system-ui, -apple-system, sans-serif;
+      padding: 24px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .panel { width: min(960px, 100%); margin: 0 auto; }
+    h1 { font-size: 32px; font-weight: 300; letter-spacing: -0.02em; margin: 0 0 8px; }
+    .hint, .field-hint { color: var(--muted); line-height: 1.5; }
+    .hint { margin-bottom: 28px; }
+    .field-hint { margin: 0; font-size: 13px; }
+    form { display: grid; gap: 18px; }
+    label { display: grid; gap: 8px; font-size: 14px; color: var(--muted); }
+    input, select {
+      width: 100%;
+      min-height: 52px;
+      border-radius: 16px;
+      border: 1px solid var(--ring);
+      background: var(--surface);
+      color: var(--text);
+      padding: 0 16px;
+      font-size: 16px;
+    }
+    .section-title {
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .tuya { display: grid; gap: 18px; }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(200px, 0.8fr) minmax(300px, 1.2fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .order-column, .detail { display: grid; gap: 12px; align-content: start; }
+    .order {
+      display: grid;
+      gap: 8px;
+      max-height: 460px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .order button {
+      min-height: 48px;
+      border-radius: 16px;
+      text-align: left;
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--ring);
+      padding: 0 16px;
+    }
+    .order button.selected {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .detail {
+      padding: 16px;
+      border-radius: 20px;
+      border: 1px solid var(--ring);
+    }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+    .item-actions {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
+    }
+    .item-actions button { padding: 0 16px; }
+    button, .link-button {
+      min-height: 52px;
+      border-radius: 999px;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 20px;
+    }
+    button[type="submit"] { background: var(--text); color: #000000; flex: 1; }
+    button.secondary, .link-button, .order button {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--ring);
+    }
+    .order button { color: var(--text); }
+    .order button.selected { color: var(--accent); }
+    .link-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #saveMessage { min-height: 20px; color: var(--accent); }
+    #testResult { min-height: 20px; font-size: 14px; line-height: 1.45; }
+    #testResult.ok { color: #a8dab5; }
+    #testResult.bad, #testResult.mixed { color: #f28b82; }
+    #testResult.hint { color: var(--muted); }
+    @media (max-width: 720px) {
+      .workspace, .pair { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <h1>AV system control</h1>
+    <p class="hint">
+      Select a day to set when power comes on and off, then Apply.
+      The power-on order below is the sequence of devices. Shutdown runs
+      that list in reverse.
+    </p>
+
+    <form id="avForm">
+      <div class="tuya">
+        <div class="section-title">Tuya</div>
+        <label>
+          Project code
+          <input id="projectCode" type="text" autocomplete="off" spellcheck="false">
+        </label>
+        <label>
+          Access ID
+          <input id="accessId" type="text" autocomplete="off" spellcheck="false">
+        </label>
+        <label>
+          Access secret
+          <input id="accessSecret" type="password" autocomplete="off">
+          <span id="secretHint" class="field-hint" hidden>Saved on this device. Leave blank to keep it.</span>
+        </label>
+      </div>
+
+      <div class="workspace">
+        <section class="order-column">
+          <div class="section-title">Schedule</div>
+          <div id="days" class="order"></div>
+        </section>
+        <section class="detail">
+          <div class="section-title">Day detail</div>
+          <div class="pair">
+            <label>
+              On
+              <select id="dayOnMode">
+                <option value="none">None</option>
+                <option value="time">Time</option>
+              </select>
+            </label>
+            <label>
+              On time
+              <input id="dayOn" type="time">
+            </label>
+          </div>
+          <div class="pair">
+            <label>
+              Off
+              <select id="dayOffMode">
+                <option value="none">None</option>
+                <option value="time">Time</option>
+              </select>
+            </label>
+            <label>
+              Off time
+              <input id="dayOff" type="time">
+            </label>
+          </div>
+          <div class="item-actions">
+            <button id="dayApplyButton" class="secondary" type="button">Apply</button>
+          </div>
+          <div class="pair">
+            <label>
+              Ensure off every day
+              <select id="ensureOffMode">
+                <option value="none">None</option>
+                <option value="time">Time</option>
+              </select>
+            </label>
+            <label>
+              Ensure off time
+              <input id="ensureOff" type="time">
+            </label>
+          </div>
+          <label>
+            Delay off step (minutes)
+            <input id="delayMinutes" type="number" min="1" inputmode="numeric">
+          </label>
+        </section>
+      </div>
+
+      <div class="workspace">
+        <section class="order-column">
+          <div class="section-title">Power-on order</div>
+          <div id="order" class="order"></div>
+        </section>
+        <section class="detail">
+          <div class="section-title">Item detail</div>
+          <label>
+            Name
+            <input id="label" type="text" autocomplete="off" spellcheck="false">
+          </label>
+          <div class="pair">
+            <label>
+              Device ID
+              <input id="deviceId" type="text" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              IP address
+              <input id="ip" type="text" autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+          <label>
+            Local key
+            <input id="localKey" type="password" autocomplete="off">
+            <span id="keyHint" class="field-hint" hidden>Saved on this device. Leave blank to keep it.</span>
+          </label>
+          <div class="pair">
+            <label>
+              Protocol
+              <input id="protocol" type="text" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              Delay before the next item (seconds)
+              <input id="delaySec" type="number" min="0" inputmode="numeric">
+            </label>
+          </div>
+          <div class="item-actions">
+            <button id="upButton" class="secondary" type="button">Up</button>
+            <button id="downButton" class="secondary" type="button">Down</button>
+            <button id="applyButton" class="secondary" type="button">Apply</button>
+            <button id="addButton" class="secondary" type="button">Add</button>
+            <button id="removeButton" class="secondary" type="button">Remove</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="saveMessage"></div>
+      <div id="testResult"></div>
+      <div class="actions">
+        <a class="link-button" href="/config">Configuration</a>
+        <button id="testButton" class="secondary" type="button">Test connection</button>
+        <button id="saveButton" type="submit">Save</button>
+      </div>
+    </form>
+  </main>
+
+  <script>
+    const form = document.getElementById("avForm");
+    const orderEl = document.getElementById("order");
+    const daysEl = document.getElementById("days");
+    const saveMessage = document.getElementById("saveMessage");
+    const dayLabels = {
+      sunday: "Sunday",
+      monday: "Monday",
+      tuesday: "Tuesday",
+      wednesday: "Wednesday",
+      thursday: "Thursday",
+      friday: "Friday",
+      saturday: "Saturday"
+    };
+    let items = [];
+    let selected = -1;
+    let days = [];
+    let selectedDay = 0;
+    let savedAccessId = "";
+    let hasAccessSecret = false;
+
+    function setValue(id, value) {
+      const input = document.getElementById(id);
+      input.value = value == null ? "" : String(value);
+      input.setAttribute("value", input.value);
+    }
+
+    function readDetail() {
+      const delay = Number(document.getElementById("delaySec").value);
+      return {
+        label: document.getElementById("label").value,
+        deviceId: document.getElementById("deviceId").value,
+        ip: document.getElementById("ip").value,
+        localKey: document.getElementById("localKey").value,
+        protocol: document.getElementById("protocol").value,
+        delaySec: delay
+      };
+    }
+
+    function showDetail(item) {
+      setValue("label", item ? item.label : "");
+      setValue("deviceId", item ? item.deviceId : "");
+      setValue("ip", item ? item.ip : "");
+      setValue("localKey", item ? item.localKey : "");
+      setValue("protocol", item ? (item.protocol || "3.4") : "3.4");
+      setValue("delaySec", item ? item.delaySec : 0);
+      refreshKeyHint();
+    }
+
+    function detailIsValid(draft) {
+      if (!Number.isInteger(draft.delaySec) || draft.delaySec < 0) {
+        saveMessage.textContent = "Delay must be a whole number of seconds.";
+        return false;
+      }
+      return true;
+    }
+
+    function keyCanStay() {
+      if (selected < 0 || !items[selected] || !items[selected].hasLocalKey) return false;
+      if (document.getElementById("localKey").value !== "") return false;
+      const item = items[selected];
+      if (document.getElementById("deviceId").value.trim() !== item.savedDeviceId) return false;
+      const ip = document.getElementById("ip").value.trim();
+      if (item.savedIP && ip !== item.savedIP) return false;
+      return true;
+    }
+
+    function refreshKeyHint() {
+      document.getElementById("keyHint").hidden = !keyCanStay();
+    }
+
+    function secretCanStay() {
+      if (!hasAccessSecret || document.getElementById("accessSecret").value !== "") return false;
+      const id = document.getElementById("accessId").value.trim();
+      return !savedAccessId || id === savedAccessId;
+    }
+
+    function refreshSecretHint() {
+      document.getElementById("secretHint").hidden = !secretCanStay();
+    }
+
+    function writeDetail(item, draft) {
+      item.label = draft.label;
+      item.deviceId = draft.deviceId;
+      item.ip = draft.ip;
+      item.protocol = draft.protocol;
+      item.delaySec = draft.delaySec;
+      if (draft.localKey !== "") {
+        item.localKey = draft.localKey;
+        item.hasLocalKey = true;
+      }
+    }
+
+    function renderList() {
+      orderEl.replaceChildren();
+      items.forEach((item, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = (index + 1) + ". " + ((item.label || "").trim() || "New item");
+        if (index === selected) button.className = "selected";
+        button.addEventListener("click", () => select(index));
+        orderEl.append(button);
+      });
+      const current = orderEl.querySelector(".selected");
+      if (current && current.scrollIntoView) current.scrollIntoView({ block: "nearest" });
+      document.getElementById("upButton").disabled = selected <= 0;
+      document.getElementById("downButton").disabled = selected < 0 || selected >= items.length - 1;
+      document.getElementById("applyButton").disabled = selected < 0;
+      document.getElementById("removeButton").disabled = selected < 0;
+    }
+
+    function select(index) {
+      selected = index;
+      showDetail(items[index]);
+      renderList();
+    }
+
+    function applyChanges() {
+      if (selected < 0) return false;
+      const draft = readDetail();
+      if (!detailIsValid(draft)) return false;
+      writeDetail(items[selected], draft);
+      renderList();
+      saveMessage.textContent = "";
+      return true;
+    }
+
+    function move(delta) {
+      const next = selected + delta;
+      if (selected < 0 || next < 0 || next >= items.length) return;
+      const row = items[selected];
+      items.splice(selected, 1);
+      items.splice(next, 0, row);
+      selected = next;
+      renderList();
+    }
+
+    function addItem() {
+      const draft = readDetail();
+      if (!detailIsValid(draft)) return;
+      const item = {
+        id: "",
+        label: draft.label,
+        deviceId: draft.deviceId,
+        ip: draft.ip,
+        localKey: draft.localKey,
+        protocol: draft.protocol || "3.4",
+        delaySec: draft.delaySec,
+        hasLocalKey: draft.localKey !== ""
+      };
+      items.push(item);
+      selected = items.length - 1;
+      showDetail(item);
+      renderList();
+      saveMessage.textContent = "";
+    }
+
+    function removeItem() {
+      if (selected < 0) return;
+      const name = (items[selected].label || "").trim() || "this item";
+      if (!window.confirm("Remove " + name + "?")) return;
+      items.splice(selected, 1);
+      if (items.length === 0) {
+        selected = -1;
+        showDetail(null);
+      } else {
+        selected = Math.min(selected, items.length - 1);
+        showDetail(items[selected]);
+      }
+      renderList();
+    }
+
+    function daySummary(day) {
+      const on = day.on || "";
+      const off = day.off || "";
+      if (!on && !off) return "None";
+      if (on && off) return on + " – " + off;
+      if (on) return "On " + on;
+      return "Off " + off;
+    }
+
+    function setClock(id, value) {
+      const mode = document.getElementById(id + "Mode");
+      const time = document.getElementById(id);
+      if (!value) {
+        mode.value = "none";
+        time.value = "";
+        time.disabled = true;
+      } else {
+        mode.value = "time";
+        time.disabled = false;
+        time.value = value;
+        time.setAttribute("value", value);
+      }
+    }
+
+    function readClock(id) {
+      const mode = document.getElementById(id + "Mode");
+      if (mode.value !== "time") return "";
+      return document.getElementById(id).value;
+    }
+
+    function clockChoiceIsValid(id, label) {
+      if (document.getElementById(id + "Mode").value === "time" && !readClock(id)) {
+        saveMessage.textContent = label + " needs a time, or None.";
+        return false;
+      }
+      return true;
+    }
+
+    function bindClock(id) {
+      document.getElementById(id + "Mode").addEventListener("change", () => {
+        const time = document.getElementById(id);
+        const none = document.getElementById(id + "Mode").value !== "time";
+        time.disabled = none;
+        if (none) time.value = "";
+      });
+    }
+
+    function showDay(day) {
+      setClock("dayOn", day ? day.on : "");
+      setClock("dayOff", day ? day.off : "");
+    }
+
+    function renderDays() {
+      daysEl.replaceChildren();
+      days.forEach((day, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = (dayLabels[day.id] || day.id) + " · " + daySummary(day);
+        if (index === selectedDay) button.className = "selected";
+        button.addEventListener("click", () => selectDay(index));
+        daysEl.append(button);
+      });
+    }
+
+    function selectDay(index) {
+      selectedDay = index;
+      showDay(days[index]);
+      renderDays();
+    }
+
+    function applyDay() {
+      if (selectedDay < 0 || !days[selectedDay]) return false;
+      if (!clockChoiceIsValid("dayOn", "On")) return false;
+      if (!clockChoiceIsValid("dayOff", "Off")) return false;
+      days[selectedDay].on = readClock("dayOn");
+      days[selectedDay].off = readClock("dayOff");
+      renderDays();
+      saveMessage.textContent = "";
+      return true;
+    }
+
+    bindClock("dayOn");
+    bindClock("dayOff");
+    bindClock("ensureOff");
+    document.getElementById("dayApplyButton").addEventListener("click", applyDay);
+
+    document.getElementById("upButton").addEventListener("click", () => move(-1));
+    document.getElementById("downButton").addEventListener("click", () => move(1));
+    document.getElementById("applyButton").addEventListener("click", applyChanges);
+    document.getElementById("addButton").addEventListener("click", addItem);
+    document.getElementById("removeButton").addEventListener("click", removeItem);
+
+    function applyView(data) {
+      document.getElementById("projectCode").value = data.projectCode || "";
+      document.getElementById("accessId").value = data.accessId || "";
+      savedAccessId = data.accessId || "";
+      hasAccessSecret = !!data.hasAccessSecret;
+      refreshSecretHint();
+      items = (data.items || []).map((item) => ({
+        id: item.id || "",
+        label: item.label || "",
+        deviceId: item.deviceId || "",
+        ip: item.ip || "",
+        savedDeviceId: item.deviceId || "",
+        savedIP: item.ip || "",
+        localKey: "",
+        protocol: item.protocol || "3.4",
+        delaySec: Number(item.delaySec) || 0,
+        hasLocalKey: !!item.hasLocalKey
+      }));
+      if (items.length === 0) {
+        selected = -1;
+        showDetail(null);
+      } else {
+        selected = 0;
+        showDetail(items[0]);
+      }
+      renderList();
+      days = (data.days || []).map((day) => ({
+        id: day.id,
+        on: day.on || "",
+        off: day.off || ""
+      }));
+      selectedDay = days.length ? 0 : -1;
+      showDay(days[0] || null);
+      renderDays();
+      setClock("ensureOff", data.ensureOff || "");
+      setValue("delayMinutes", data.delayMinutes || 60);
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (selected >= 0 && !applyChanges()) return;
+      if (selectedDay >= 0 && !applyDay()) return;
+      if (!clockChoiceIsValid("ensureOff", "Ensure off")) return;
+      const delayMinutes = Number(document.getElementById("delayMinutes").value);
+      if (!Number.isInteger(delayMinutes) || delayMinutes < 1) {
+        saveMessage.textContent = "Delay off step must be at least 1 minute.";
+        return;
+      }
+      for (let i = 0; i < items.length; i++) {
+        if (!Number.isInteger(items[i].delaySec) || items[i].delaySec < 0) {
+          saveMessage.textContent = "Item " + (i + 1) + " needs a whole number of seconds.";
+          return;
+        }
+      }
+      saveMessage.textContent = "Saving...";
+      document.getElementById("saveButton").disabled = true;
+      try {
+        const response = await fetch("/api/avcontrol/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectCode: document.getElementById("projectCode").value.trim(),
+            accessId: document.getElementById("accessId").value.trim(),
+            accessSecret: document.getElementById("accessSecret").value,
+            items: items.map((item) => ({
+              id: item.id,
+              label: item.label.trim(),
+              deviceId: item.deviceId.trim(),
+              ip: item.ip.trim(),
+              localKey: item.localKey,
+              protocol: (item.protocol || "").trim(),
+              delaySec: item.delaySec
+            })),
+            days: days.map((day) => ({ id: day.id, on: day.on, off: day.off })),
+            ensureOff: readClock("ensureOff"),
+            delayMinutes: delayMinutes
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          saveMessage.textContent = data.error || "Save failed";
+          return;
+        }
+        document.getElementById("accessSecret").value = "";
+        applyView(data);
+        saveMessage.textContent = "Saved.";
+      } catch (error) {
+        saveMessage.textContent = "Save failed: " + error;
+      } finally {
+        document.getElementById("saveButton").disabled = false;
+      }
+    });
+
+    const testResult = document.getElementById("testResult");
+    const testButton = document.getElementById("testButton");
+    let probeErrors = [];
+    let probeHeadline = "";
+    let probeIndex = 0;
+    let probeTimer = 0;
+
+    function stopProbeRotation() {
+      clearTimeout(probeTimer);
+      probeTimer = 0;
+      probeErrors = [];
+      probeHeadline = "";
+      probeIndex = 0;
+    }
+
+    function showProbe(className, text) {
+      stopProbeRotation();
+      testResult.className = className;
+      testResult.textContent = text;
+    }
+
+    function showProbeError() {
+      const count = probeErrors.length;
+      if (count === 0) return;
+      const current = probeErrors[probeIndex % count];
+      if (count === 1) {
+        testResult.textContent = current;
+        return;
+      }
+      const place = ((probeIndex % count) + 1) + " of " + count;
+      testResult.textContent = probeHeadline
+        ? probeHeadline + " · " + place + " · " + current
+        : place + " · " + current;
+    }
+
+    function rotateProbeErrors() {
+      probeTimer = 0;
+      if (probeErrors.length < 2) return;
+      probeIndex = (probeIndex + 1) % probeErrors.length;
+      showProbeError();
+      armProbeRotation();
+    }
+
+    function armProbeRotation() {
+      if (probeTimer || probeErrors.length < 2) return;
+      probeTimer = setTimeout(rotateProbeErrors, 2500);
+    }
+
+    function showProbeErrors(className, headline, errors) {
+      stopProbeRotation();
+      probeErrors = errors.slice();
+      probeHeadline = headline || "";
+      probeIndex = 0;
+      testResult.className = className;
+      showProbeError();
+      armProbeRotation();
+    }
+
+    function listedItems() {
+      const copy = [];
+      for (let i = 0; i < items.length; i++) {
+        copy.push({
+          id: items[i].id,
+          label: items[i].label,
+          deviceId: items[i].deviceId,
+          ip: items[i].ip,
+          localKey: items[i].localKey,
+          protocol: items[i].protocol,
+          delaySec: items[i].delaySec
+        });
+      }
+      if (selected < 0) return copy;
+      const draft = readDetail();
+      if (!detailIsValid(draft)) return null;
+      copy[selected].label = draft.label;
+      copy[selected].deviceId = draft.deviceId;
+      copy[selected].ip = draft.ip;
+      copy[selected].protocol = draft.protocol;
+      copy[selected].delaySec = draft.delaySec;
+      if (draft.localKey !== "") copy[selected].localKey = draft.localKey;
+      return copy;
+    }
+
+    ["deviceId", "ip", "localKey"].forEach((id) => {
+      document.getElementById(id).addEventListener("input", refreshKeyHint);
+    });
+    document.getElementById("accessId").addEventListener("input", refreshSecretHint);
+    document.getElementById("accessSecret").addEventListener("input", refreshSecretHint);
+
+    testButton.addEventListener("click", async () => {
+      const listed = listedItems();
+      if (!listed) return;
+      testButton.disabled = true;
+      showProbe("hint", "Testing each item...");
+      try {
+        const response = await fetch("/api/avcontrol/config/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectCode: document.getElementById("projectCode").value.trim(),
+            accessId: document.getElementById("accessId").value.trim(),
+            accessSecret: document.getElementById("accessSecret").value,
+            items: listed.map((item) => ({
+              id: item.id,
+              label: item.label.trim(),
+              deviceId: item.deviceId.trim(),
+              ip: item.ip.trim(),
+              localKey: item.localKey,
+              protocol: (item.protocol || "").trim(),
+              delaySec: item.delaySec
+            }))
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          showProbe("bad", data.error || "Test failed");
+          return;
+        }
+        const results = data.items || [];
+        const errors = [];
+        let any = false;
+        for (let i = 0; i < results.length; i++) {
+          if (results[i].ok) {
+            any = true;
+            continue;
+          }
+          errors.push((results[i].label || "Item") + ": " + (results[i].summary || ""));
+        }
+        if (errors.length === 0) {
+          showProbe("ok", data.summary || "Reachable");
+          return;
+        }
+        showProbeErrors(any ? "mixed" : "bad", data.summary || "", errors);
+      } catch (error) {
+        showProbe("bad", String(error));
+      } finally {
+        testButton.disabled = false;
+      }
+    });
+
+    fetch("/api/avcontrol/config")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not load the configuration");
+        applyView(data);
+      })
+      .catch((error) => {
+        saveMessage.textContent = String(error.message || error);
+      });
+  </script>
+</body>
+</html>

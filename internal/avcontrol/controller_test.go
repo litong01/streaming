@@ -3,6 +3,8 @@ package avcontrol
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -332,6 +334,45 @@ func TestScheduledOnWhileInsideTheWindow(t *testing.T) {
 	got := cmd.calls()
 	if len(got) != 2 || !got[0].on || !got[1].on {
 		t.Fatalf("catch-up on %#v", got)
+	}
+}
+
+func TestMissingFileUsesTheSeed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "avcontrol.yaml")
+	c := New(path, Options{Seed: []byte(fixtureYAML)})
+	c.reload()
+	if !c.configured() || !c.fromSeed {
+		t.Fatalf("configured %t seed %t problem %s", c.configured(), c.fromSeed, c.problemText())
+	}
+
+	saved := strings.Replace(fixtureYAML, `timezone: "America/New_York"`, `timezone: "America/Chicago"`, 1)
+	if err := os.WriteFile(path, []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c.reload()
+	if c.fromSeed || c.file.Location().String() != "America/Chicago" {
+		t.Fatalf("seed %t zone %s", c.fromSeed, c.file.Location())
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	c.reload()
+	if !c.fromSeed || c.file.Location().String() != "America/New_York" {
+		t.Fatalf("seed %t zone %s", c.fromSeed, c.file.Location())
+	}
+}
+
+func TestABadSeedDoesNotConfigure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "avcontrol.yaml")
+	c := New(path, Options{Seed: []byte("switches: []\n")})
+	c.reload()
+	if c.configured() || c.problem == "" {
+		t.Fatalf("configured %t problem %q", c.configured(), c.problem)
+	}
+	c.reload()
+	if c.configured() {
+		t.Fatal("retried a seed that cannot be parsed")
 	}
 }
 

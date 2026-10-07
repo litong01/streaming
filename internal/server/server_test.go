@@ -1,15 +1,18 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"streaming/internal/avcontrol"
 	"streaming/internal/config"
 	"streaming/internal/smp"
 )
@@ -142,6 +145,98 @@ func TestAutoVolumeIsSavedAndBlocksTheFaders(t *testing.T) {
 	}
 }
 
+func TestAVConfigurationRoundTrip(t *testing.T) {
+	s := newTestServer(t)
+	s.pages.ConfigIndex = []byte("<h1>Configuration</h1><a href=\"/config/streaming\">Streaming</a>")
+	s.pages.Config = []byte("<h1>Streaming</h1>")
+	s.pages.AVConfig = []byte("<h1>AV system control</h1>")
+	path := filepath.Join(t.TempDir(), "avcontrol.yaml")
+	s.AttachAV(avcontrol.New(path, avcontrol.Options{Seed: []byte(avConfigSeed)}))
+
+	if rec := get(t, s, "/config"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Streaming") {
+		t.Fatalf("index %d %s", rec.Code, rec.Body)
+	}
+	if rec := get(t, s, "/config/streaming"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Streaming") {
+		t.Fatalf("streaming %d %s", rec.Code, rec.Body)
+	}
+	if rec := get(t, s, "/config/av"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "AV system control") {
+		t.Fatalf("av page %d %s", rec.Code, rec.Body)
+	}
+
+	rec := get(t, s, "/api/avcontrol/config")
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "secret-value") || strings.Contains(rec.Body.String(), "kept-key") {
+		t.Fatalf("get %d %s", rec.Code, rec.Body)
+	}
+
+	body := `{"projectCode":"project-2","accessId":"access-1","accessSecret":"","items":[{"id":"a","label":"Alpha first","deviceId":"dev-a","ip":"192.0.2.10","protocol":"3.4","delaySec":9},{"label":"Gamma","deviceId":"dev-c","localKey":"gamma-key","protocol":"3.5","delaySec":4}]}`
+	rec = httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/avcontrol/config", strings.NewReader(body)))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Alpha first") || strings.Contains(rec.Body.String(), "kept-key") {
+		t.Fatalf("save %d %s", rec.Code, rec.Body)
+	}
+
+	saved, err := avcontrol.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Developer.AccessSecret != "secret-value" || saved.Developer.AccessID != "access-1" || saved.Developer.ProjectCode != "project-2" {
+		t.Fatalf("tuya %+v", saved.Developer)
+	}
+	if len(saved.Switches) != 2 || saved.Switches[0].Label != "Alpha first" || saved.Switches[0].LocalKey != "kept-key" {
+		t.Fatalf("switches %+v", saved.Switches)
+	}
+	if saved.Switches[1].ID != "gamma" || saved.Startup[0].SettleSec != 9 || saved.Startup[1].SettleSec != 4 {
+		t.Fatalf("startup %#v second %+v", saved.Startup, saved.Switches[1])
+	}
+	if saved.Schedule.EnsureOffDaily != "17:00" {
+		t.Fatalf("schedule lost: %+v", saved.Schedule)
+	}
+}
+
+func TestAVConnectionTestDoesNotSave(t *testing.T) {
+	s := newTestServer(t)
+	path := filepath.Join(t.TempDir(), "avcontrol.yaml")
+	cmd := &stubAV{ok: map[string]bool{"a": true}}
+	s.AttachAV(avcontrol.New(path, avcontrol.Options{Seed: []byte(avConfigSeed), Commands: cmd}))
+
+	body := `{"projectCode":"project-1","accessId":"access-1","items":[{"id":"a","label":"Alpha","deviceId":"dev-a","ip":"192.0.2.10","protocol":"3.4","delaySec":2}]}`
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/avcontrol/config/test", strings.NewReader(body)))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Reachable") || strings.Contains(rec.Body.String(), "kept-key") {
+		t.Fatalf("test %d %s", rec.Code, rec.Body)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("test wrote a file: %v", err)
+	}
+	if cmd.sets != 0 {
+		t.Fatal("test turned a switch")
+	}
+}
+
+type stubAV struct {
+	ok   map[string]bool
+	sets int
+}
+
+func (s *stubAV) Set(context.Context, avcontrol.Switch, bool) error {
+	s.sets++
+	return nil
+}
+
+func (s *stubAV) States(_ context.Context, switches []avcontrol.Switch) map[string]avcontrol.Reading {
+	out := make(map[string]avcontrol.Reading, len(switches))
+	for _, sw := range switches {
+		if s.ok[sw.ID] {
+			out[sw.ID] = avcontrol.Reading{On: true}
+			continue
+		}
+		out[sw.ID] = avcontrol.Reading{Err: errors.New("no reply")}
+	}
+	return out
+}
+
+func (s *stubAV) Use(*avcontrol.File) {}
+
 func TestAVControlPageAndActions(t *testing.T) {
 	s := newTestServer(t)
 	if rec := get(t, s, "/avcontrol"); rec.Code != http.StatusNotFound {
@@ -161,3 +256,28 @@ func TestAVControlPageAndActions(t *testing.T) {
 		t.Fatalf("on without a controller: %d", rec.Code)
 	}
 }
+
+const avConfigSeed = `
+server:
+  timezone: "America/New_York"
+control:
+  prefer_local: false
+  cloud_fallback: true
+  command_mode: "absolute"
+switches:
+  - id: a
+    label: Alpha
+    device_id: dev-a
+    local_key: kept-key
+startup:
+  - { switch: a, settle_sec: 2 }
+shutdown: "reverse_of_startup"
+schedule:
+  ensure_off_daily: "17:00"
+off_delay:
+  step_minutes: 60
+developer.tuya.com:
+  project_code: project-1
+  access_id: access-1
+  access_secret: secret-value
+`

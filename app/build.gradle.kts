@@ -102,7 +102,7 @@ val buildAndroidGoServer = tasks.register<BuildAndroidGoServer>("buildAndroidGoS
     inputs.files(
         rootProject.fileTree(".") {
             include("*.go", "go.mod", "go.sum")
-            include("internal/**/*.go", "web/**", "scripts/build-android-go.sh")
+            include("internal/**/*.go", "web/**", "avcontrol/avcontrol-seed.yaml", "scripts/build-android-go.sh")
             exclude("app/**", "build/**")
         },
     )
