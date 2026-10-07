@@ -278,5 +278,10 @@ func pkcs7Unpad(b []byte) ([]byte, error) {
 	if n == 0 || n > aes.BlockSize || n > len(b) {
 		return nil, fmt.Errorf("bad tuya padding")
 	}
+	for _, pad := range b[len(b)-n:] {
+		if int(pad) != n {
+			return nil, fmt.Errorf("bad tuya padding")
+		}
+	}
 	return b[:len(b)-n], nil
 }

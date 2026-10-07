@@ -92,6 +92,13 @@ type Developer struct {
 }
 
 func Load(path string) (*File, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("read av control config: %w", err)
+	}
+	if info.Size() > 1<<20 {
+		return nil, fmt.Errorf("read av control config: file is too large")
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read av control config: %w", err)

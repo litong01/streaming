@@ -85,6 +85,14 @@ func (d *deviceClient) States(ctx context.Context, switches []Switch) map[string
 		wg.Add(1)
 		go func(sw Switch) {
 			defer wg.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					log.Printf("av control: %s status read recovered: %v", sw.ID, recovered)
+					mu.Lock()
+					out[sw.ID] = Reading{Err: fmt.Errorf("internal error")}
+					mu.Unlock()
+				}
+			}()
 			on, err := d.readOne(ctx, sw)
 			mu.Lock()
 			out[sw.ID] = Reading{On: on, Err: err}

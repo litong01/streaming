@@ -55,7 +55,10 @@ func localSession(ctx context.Context, sw Switch, fn func(*lanSession) error) er
 
 func protocolsToTry(sw Switch) []string {
 	if learned, ok := learnedProtocol.Load(sw.IP); ok {
-		return []string{learned.(string)}
+		if version, ok := learned.(string); ok && version != "" && version != "3.5" {
+			return []string{version}
+		}
+		learnedProtocol.Delete(sw.IP)
 	}
 	first := protocolOf(sw)
 	out := []string{first}
@@ -77,6 +80,10 @@ func withSession(ctx context.Context, sw Switch, version string, fn func(*lanSes
 		return err
 	}
 	defer conn.Close()
+	// A cancelled sequence must drop the socket, or the switch keeps the old
+	// attempt open while the next press starts a new one.
+	stopWatch := closeOnCancel(ctx, conn)
+	defer stopWatch()
 	deadline := time.Now().Add(5 * time.Second)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
@@ -96,6 +103,18 @@ func withSession(ctx context.Context, sw Switch, version string, fn func(*lanSes
 		}
 	}
 	return fn(session)
+}
+
+func closeOnCancel(ctx context.Context, conn net.Conn) func() {
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-stop:
+		}
+	}()
+	return func() { close(stop) }
 }
 
 func (s *lanSession) negotiate34() error {

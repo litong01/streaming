@@ -124,14 +124,7 @@ func (c *Controller) Run(ctx context.Context) {
 	c.mu.Unlock()
 	defer c.stopSequence()
 
-	c.reload()
-	if c.configured() {
-		log.Printf("av control: config %s", c.path)
-	} else {
-		log.Printf("av control: %s", c.problemText())
-	}
-	c.sample(ctx)
-	c.tick()
+	c.pass(ctx, true)
 
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
@@ -140,14 +133,32 @@ func (c *Controller) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.reload()
-			if c.isBusy() {
-				continue
-			}
-			c.sample(ctx)
-			c.tick()
+			c.pass(ctx, false)
 		}
 	}
+}
+
+// pass is one pass of the background loop. A panic here is logged and the
+// loop keeps going, so a bad read cannot take the streaming server down.
+func (c *Controller) pass(ctx context.Context, announce bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("av control: recovered %v", recovered)
+		}
+	}()
+	c.reload()
+	if announce {
+		if c.configured() {
+			log.Printf("av control: config %s", c.path)
+		} else {
+			log.Printf("av control: %s", c.problemText())
+		}
+	}
+	if c.isBusy() {
+		return
+	}
+	c.sample(ctx)
+	c.tick()
 }
 
 func (c *Controller) TurnOn() error {

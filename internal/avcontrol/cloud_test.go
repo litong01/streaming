@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -115,5 +116,41 @@ func TestPlaceholderLocalKeyIsSkipped(t *testing.T) {
 	}, true)
 	if err == nil || !strings.Contains(err.Error(), "local key") {
 		t.Fatal(err)
+	}
+}
+
+func TestPKCS7RejectsTornPadding(t *testing.T) {
+	padded := pkcs7Pad([]byte("hi"), 16)
+	plain, err := pkcs7Unpad(append([]byte(nil), padded...))
+	if err != nil || string(plain) != "hi" {
+		t.Fatalf("round trip %q %v", plain, err)
+	}
+	padded[len(padded)-2] = 0
+	if _, err := pkcs7Unpad(padded); err == nil {
+		t.Fatal("accepted torn padding")
+	}
+}
+
+func TestCancelClosesTheLocalSocket(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := closeOnCancel(ctx, right)
+	defer stop()
+	cancel()
+	_ = right.SetDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	if _, err := right.Read(buf); err == nil {
+		t.Fatal("read continued after cancel")
+	}
+}
+
+func TestLearnedProtocolMustBeText(t *testing.T) {
+	learnedProtocol.Store("10.0.0.9", 34)
+	defer learnedProtocol.Delete("10.0.0.9")
+	got := protocolsToTry(Switch{IP: "10.0.0.9", Protocol: "3.4"})
+	if len(got) != 2 || got[0] != "3.4" || got[1] != "3.3" {
+		t.Fatalf("protocols %v", got)
 	}
 }

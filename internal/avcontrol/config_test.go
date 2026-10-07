@@ -39,6 +39,16 @@ func TestLoadRejectsToggle(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsAnOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "avcontrol.yaml")
+	if err := os.WriteFile(path, make([]byte, 1<<20+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("error %v", err)
+	}
+}
+
 func TestExampleFileParsesWhenPresent(t *testing.T) {
 	path := filepath.Join("..", "..", "avcontrol", "avcontrol.yaml")
 	if _, err := os.Stat(path); err != nil {
