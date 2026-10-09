@@ -373,9 +373,13 @@ func fillFromNetwork(ctx context.Context, devices []catalogDevice) []catalogDevi
 	}
 	// Every open port is tried until the scan deadline. A fixed prefix of the
 	// sorted list previously hid the Ethernet LAN behind another subnet.
+	var from []string
+	for _, iface := range localIPv4() {
+		from = append(from, iface.ip.String())
+	}
 	hosts := subnetHosts(claimed)
 	open := probePort(ctx, hosts)
-	log.Printf("av control: LAN scan checked %d addresses, %d Tuya ports answered", len(hosts), len(open))
+	log.Printf("av control: LAN scan from %s checked %d addresses, %d Tuya ports answered", strings.Join(from, ", "), len(hosts), len(open))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	// Hosts are independent. Android can make a wrong-key handshake wait for
@@ -692,8 +696,42 @@ func usableLAN(iface net.Interface) bool {
 }
 
 func localIPv4() []ifaceAddr {
+	out := interfaceIPv4()
+	if len(out) > 0 {
+		return out
+	}
+	// Android 11 and later refuse the netlink request behind net.Interfaces,
+	// so the tablet would scan nothing. The address the system routes from is
+	// still available, and Wi-Fi networks here are /24.
+	if ip := routedIPv4(); ip != nil {
+		mask := net.CIDRMask(24, 32)
+		return []ifaceAddr{{ip: ip, mask: mask, broadcast: broadcastAddr(ip, mask)}}
+	}
+	return nil
+}
+
+func routedIPv4() net.IP {
+	for _, target := range []string{"8.8.8.8:53", "1.1.1.1:53", "192.168.1.1:53"} {
+		conn, err := net.Dial("udp4", target)
+		if err != nil {
+			continue
+		}
+		addr, ok := conn.LocalAddr().(*net.UDPAddr)
+		_ = conn.Close()
+		if !ok {
+			continue
+		}
+		if ip := lanIP(addr.IP.String()); ip != "" {
+			return net.ParseIP(ip).To4()
+		}
+	}
+	return nil
+}
+
+func interfaceIPv4() []ifaceAddr {
 	ifaces, err := net.Interfaces()
 	if err != nil {
+		log.Printf("av control: interface list unavailable (%v); using the routed address", err)
 		return nil
 	}
 	var out []ifaceAddr
@@ -711,10 +749,13 @@ func localIPv4() []ifaceAddr {
 				continue
 			}
 			ip := ipnet.IP.To4()
-			if lanIP(ip.String()) == "" {
+			if ip == nil || lanIP(ip.String()) == "" {
 				continue
 			}
 			mask := ipnet.Mask
+			if len(mask) == net.IPv6len {
+				mask = mask[12:]
+			}
 			if len(mask) != net.IPv4len {
 				continue
 			}
