@@ -37,6 +37,28 @@ func (s *Server) handleAVConfigAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleAVConfigDiscover(w http.ResponseWriter, r *http.Request) {
+	if s.av == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "AV control is not configured"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var edit avcontrol.ConfigEdit
+	if err := readJSON(r, &edit); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	report, err := s.av.Discover(r.Context(), edit)
+	if err != nil {
+		writeAVConfigError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
 func (s *Server) handleAVConfigTest(w http.ResponseWriter, r *http.Request) {
 	if s.av == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "AV control is not configured"})

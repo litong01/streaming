@@ -110,6 +110,7 @@ func (c *Controller) SaveConfiguration(edit ConfigEdit) (ConfigView, error) {
 		return ConfigView{}, ErrNotConfigured
 	}
 
+	edit = c.withDiscoveredKeys(file, edit)
 	nextBytes, next, err := applyEdit(source, file, edit)
 	if err != nil {
 		return ConfigView{}, err

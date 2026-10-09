@@ -118,6 +118,17 @@
     #testResult.ok { color: #a8dab5; }
     #testResult.bad, #testResult.mixed { color: #f28b82; }
     #testResult.hint { color: var(--muted); }
+    dialog {
+      width: min(560px, calc(100% - 32px));
+      margin: auto;
+      border: 1px solid var(--ring);
+      border-radius: 20px;
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px;
+    }
+    dialog::backdrop { background: rgba(0, 0, 0, 0.62); }
+    dialog .order { max-height: 360px; }
     @media (max-width: 720px) {
       .workspace, .pair { grid-template-columns: 1fr; }
     }
@@ -148,6 +159,10 @@
           <input id="accessSecret" type="password" autocomplete="off">
           <span id="secretHint" class="field-hint" hidden>Saved on this device. Leave blank to keep it.</span>
         </label>
+        <p id="scanStatus" class="field-hint">Scan devices looks up the Tuya project and this server's LAN, then asks which devices to use.</p>
+        <div class="item-actions">
+          <button id="findButton" class="secondary" type="button" disabled>Scan devices</button>
+        </div>
       </div>
 
       <div class="workspace">
@@ -260,6 +275,15 @@
         <button id="saveButton" type="submit">Save</button>
       </div>
     </form>
+    <dialog id="foundDialog">
+      <div class="section-title">Devices</div>
+      <p id="findStatus" class="field-hint"></p>
+      <div id="foundList" class="order"></div>
+      <div class="item-actions">
+        <button id="addFoundButton" class="secondary" type="button" disabled>Use selected</button>
+        <button id="closeFoundButton" class="secondary" type="button">Close</button>
+      </div>
+    </dialog>
   </main>
 
   <script>
@@ -320,9 +344,10 @@
     }
 
     function keyCanStay() {
-      if (selected < 0 || !items[selected] || !items[selected].hasLocalKey) return false;
+      if (selected < 0 || !items[selected]) return false;
       if (document.getElementById("localKey").value !== "") return false;
       const item = items[selected];
+      if (!item.foundKey && !item.hasLocalKey) return false;
       if (document.getElementById("deviceId").value.trim() !== item.savedDeviceId) return false;
       const ip = document.getElementById("ip").value.trim();
       if (item.savedIP && ip !== item.savedIP) return false;
@@ -330,7 +355,14 @@
     }
 
     function refreshKeyHint() {
-      document.getElementById("keyHint").hidden = !keyCanStay();
+      const hint = document.getElementById("keyHint");
+      const stay = keyCanStay();
+      hint.hidden = !stay;
+      if (!stay) return;
+      const item = items[selected];
+      hint.textContent = item && item.foundKey
+        ? "Found for this device. Leave blank to use it."
+        : "Saved on this device. Leave blank to keep it.";
     }
 
     function secretCanStay() {
@@ -562,6 +594,7 @@
       renderDays();
       setClock("ensureOff", data.ensureOff || "");
       setValue("delayMinutes", data.delayMinutes || 60);
+      refreshFindButton();
     }
 
     form.addEventListener("submit", async (event) => {
@@ -705,8 +738,15 @@
     ["deviceId", "ip", "localKey"].forEach((id) => {
       document.getElementById(id).addEventListener("input", refreshKeyHint);
     });
-    document.getElementById("accessId").addEventListener("input", refreshSecretHint);
-    document.getElementById("accessSecret").addEventListener("input", refreshSecretHint);
+    document.getElementById("accessId").addEventListener("input", () => {
+      refreshSecretHint();
+      refreshFindButton();
+    });
+    document.getElementById("accessSecret").addEventListener("input", () => {
+      refreshSecretHint();
+      refreshFindButton();
+    });
+    document.getElementById("projectCode").addEventListener("input", refreshFindButton);
 
     testButton.addEventListener("click", async () => {
       const listed = listedItems();
@@ -757,6 +797,138 @@
       } finally {
         testButton.disabled = false;
       }
+    });
+
+    const scanStatus = document.getElementById("scanStatus");
+    const findStatus = document.getElementById("findStatus");
+    const findButton = document.getElementById("findButton");
+    const addFoundButton = document.getElementById("addFoundButton");
+    const foundList = document.getElementById("foundList");
+    const foundDialog = document.getElementById("foundDialog");
+    let found = [];
+    let finding = false;
+
+    function credentialsReady() {
+      const project = document.getElementById("projectCode").value.trim();
+      const id = document.getElementById("accessId").value.trim();
+      if (!project || !id) return false;
+      if (document.getElementById("accessSecret").value !== "") return true;
+      return secretCanStay();
+    }
+
+    function refreshFindButton() {
+      findButton.disabled = finding || !credentialsReady();
+      addFoundButton.disabled = !found.some((device) => device.selected);
+    }
+
+    function foundLabel(device) {
+      const parts = [device.name];
+      if (device.product && device.product !== device.name) parts.push(device.product);
+      parts.push(device.onNetwork && device.ip ? device.ip : "no LAN address");
+      parts.push(device.protocol ? device.protocol : "protocol unknown");
+      if (!device.hasLocalKey) parts.push("no local key");
+      return parts.join(" · ");
+    }
+
+    function renderFound() {
+      foundList.replaceChildren();
+      found.forEach((device) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = foundLabel(device);
+        if (device.selected) button.className = "selected";
+        button.addEventListener("click", () => {
+          device.selected = !device.selected;
+          button.className = device.selected ? "selected" : "";
+          refreshFindButton();
+        });
+        foundList.append(button);
+      });
+      refreshFindButton();
+    }
+
+    function rememberFound(data) {
+      const previous = new Map(found.map((device) => [device.deviceId, device.selected]));
+      found = (data.devices || []).map((device) => {
+        const deviceId = device.deviceId || "";
+        return {
+          name: device.name || deviceId || "Device",
+          deviceId: deviceId,
+          ip: device.ip || "",
+          protocol: device.protocol || "",
+          product: device.product || "",
+          hasLocalKey: !!device.hasLocalKey,
+          onNetwork: !!device.onNetwork,
+          selected: !!previous.get(deviceId)
+        };
+      });
+      findStatus.textContent = data.summary || "";
+      renderFound();
+      if (typeof foundDialog.showModal === "function" && !foundDialog.open) foundDialog.showModal();
+    }
+
+    function useFound() {
+      const chosen = found.filter((device) => device.selected && device.deviceId);
+      if (chosen.length === 0) return;
+      items = chosen.map((device) => ({
+        id: "",
+        label: device.name,
+        deviceId: device.deviceId,
+        ip: device.ip,
+        savedDeviceId: device.deviceId,
+        savedIP: device.ip,
+        localKey: "",
+        protocol: device.protocol || "3.4",
+        delaySec: 3,
+        hasLocalKey: false,
+        foundKey: device.hasLocalKey
+      }));
+      selected = 0;
+      showDetail(items[0]);
+      renderList();
+      if (foundDialog.open) foundDialog.close();
+      saveMessage.textContent = chosen.length === 1
+        ? "Device list replaced with 1 device. Test the connection, then Save."
+        : "Device list replaced with " + chosen.length + " devices. Test the connection, then Save.";
+    }
+
+    async function findDevices() {
+      if (!credentialsReady() || finding) {
+        refreshFindButton();
+        return;
+      }
+      finding = true;
+      refreshFindButton();
+      scanStatus.textContent = "Looking up devices in the Tuya project and on this server's LAN…";
+      try {
+        const response = await fetch("/api/avcontrol/config/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectCode: document.getElementById("projectCode").value.trim(),
+            accessId: document.getElementById("accessId").value.trim(),
+            accessSecret: document.getElementById("accessSecret").value
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          scanStatus.textContent = data.error || "Could not find devices";
+          return;
+        }
+        scanStatus.textContent = "Scan devices looks up the Tuya project and this server's LAN, then asks which devices to use.";
+        rememberFound(data);
+      } catch (error) {
+        scanStatus.textContent = String(error);
+      } finally {
+        finding = false;
+        refreshFindButton();
+      }
+    }
+
+    findButton.addEventListener("click", findDevices);
+    addFoundButton.addEventListener("click", useFound);
+    document.getElementById("closeFoundButton").addEventListener("click", () => {
+      if (foundDialog.open) foundDialog.close();
     });
 
     fetch("/api/avcontrol/config")

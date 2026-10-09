@@ -47,6 +47,7 @@ func (c *Controller) Probe(ctx context.Context, edit ConfigEdit) (ProbeReport, e
 		return ProbeReport{}, ErrNotConfigured
 	}
 
+	edit = c.withDiscoveredKeys(file, edit)
 	next, rows, err := prepareProbe(file, edit)
 	if err != nil {
 		return ProbeReport{}, err

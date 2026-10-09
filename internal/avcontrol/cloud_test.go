@@ -1,6 +1,7 @@
 package avcontrol
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -146,11 +147,48 @@ func TestCancelClosesTheLocalSocket(t *testing.T) {
 	}
 }
 
+func TestSessionKey35IsTheGCMCiphertext(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	client := bytes.Repeat([]byte{1}, 16)
+	device := bytes.Repeat([]byte{2}, 16)
+	got, err := sessionKey35(key, client, device)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 16 {
+		t.Fatalf("session key %d", len(got))
+	}
+	remote, ok := remoteNonce35(append(device, hmacSHA256(key, client)...), client, key)
+	if !ok || len(remote) != 16 {
+		t.Fatal("handshake payload was not accepted")
+	}
+}
+
+func TestLearnedProtocolIsDroppedWhenItFails(t *testing.T) {
+	const ip = "10.0.0.9"
+	learnedProtocol.Store(ip, "3.5")
+	defer learnedProtocol.Delete(ip)
+	sw := Switch{IP: ip, Protocol: "3.4"}
+	got := forgetLearned(sw, "3.5")
+	if _, stuck := learnedProtocol.Load(ip); stuck {
+		t.Fatal("learned protocol stuck after it failed")
+	}
+	if len(got) != 3 || got[0] != "3.4" || got[1] != "3.5" || got[2] != "3.3" {
+		t.Fatalf("protocols after a failed memory %v", got)
+	}
+}
+
+func TestSessionKey35RejectsAShortNonce(t *testing.T) {
+	if _, err := sessionKey35([]byte("0123456789abcdef"), []byte{1}, []byte{2}); err == nil {
+		t.Fatal("short nonce was accepted")
+	}
+}
+
 func TestLearnedProtocolMustBeText(t *testing.T) {
 	learnedProtocol.Store("10.0.0.9", 34)
 	defer learnedProtocol.Delete("10.0.0.9")
 	got := protocolsToTry(Switch{IP: "10.0.0.9", Protocol: "3.4"})
-	if len(got) != 2 || got[0] != "3.4" || got[1] != "3.3" {
+	if len(got) != 3 || got[0] != "3.4" || got[1] != "3.5" || got[2] != "3.3" {
 		t.Fatalf("protocols %v", got)
 	}
 }

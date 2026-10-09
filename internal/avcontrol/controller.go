@@ -86,6 +86,13 @@ type Controller struct {
 	recordingActive func() bool
 	clock           func() time.Time
 	sleeper         func(context.Context, time.Duration) error
+
+	// found keeps local keys from the latest device lookup. The page lists
+	// those devices without receiving the keys, and Save uses this copy.
+	scanMu  sync.Mutex
+	foundMu sync.Mutex
+	found   map[string]rememberedDevice
+	foundAt time.Time
 }
 
 func New(path string, opt Options) *Controller {

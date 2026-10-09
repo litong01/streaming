@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -210,6 +212,36 @@ func TestAVConnectionTestDoesNotSave(t *testing.T) {
 	}
 	if cmd.sets != 0 {
 		t.Fatal("test turned a switch")
+	}
+}
+
+func TestAVDiscoverDoesNotReturnKeys(t *testing.T) {
+	const key = "0123456789abcdef"
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1.0/token":
+			_, _ = io.WriteString(w, `{"success":true,"result":{"access_token":"tok","expire_time":7200}}`)
+		case "/v1.0/iot-01/associated-users/devices":
+			fmt.Fprintf(w, `{"success":true,"result":{"has_more":false,"devices":[{"id":"dev-1","name":"Amp","local_key":"%s"}]}}`, key)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cloud.Close()
+
+	s := newTestServer(t)
+	path := filepath.Join(t.TempDir(), "avcontrol.yaml")
+	seed := strings.Replace(avConfigSeed, "access_secret: secret-value", "access_secret: secret-value\n  endpoint: \""+cloud.URL+"\"", 1)
+	s.AttachAV(avcontrol.New(path, avcontrol.Options{Seed: []byte(seed)}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodPost, "/api/avcontrol/config/discover", strings.NewReader(`{"projectCode":"project-1","accessId":"access-1"}`))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Amp") || strings.Contains(rec.Body.String(), key) {
+		t.Fatalf("discover %d %s", rec.Code, rec.Body)
 	}
 }
 

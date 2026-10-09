@@ -187,6 +187,7 @@ func (s *Server) mux() *http.ServeMux {
 	mux.HandleFunc("/avcontrol", s.handleAVPage)
 	mux.HandleFunc("/api/avcontrol/config", s.handleAVConfigAPI)
 	mux.HandleFunc("/api/avcontrol/config/test", s.handleAVConfigTest)
+	mux.HandleFunc("/api/avcontrol/config/discover", s.handleAVConfigDiscover)
 	mux.HandleFunc("/api/avcontrol/status", s.handleAVStatus)
 	mux.HandleFunc("/api/avcontrol/on", s.handleAVOn)
 	mux.HandleFunc("/api/avcontrol/off", s.handleAVOff)
