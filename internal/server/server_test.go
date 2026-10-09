@@ -16,6 +16,7 @@ import (
 
 	"streaming/internal/avcontrol"
 	"streaming/internal/config"
+	"streaming/internal/logbuf"
 	"streaming/internal/smp"
 )
 
@@ -313,3 +314,20 @@ developer.tuya.com:
   access_id: access-1
   access_secret: secret-value
 `
+
+func TestLogsAreReadableFromTheConfigurationPage(t *testing.T) {
+	s := newTestServer(t)
+	const line = "av control: test-log-line via local"
+	if _, err := logbuf.Writer().Write([]byte(line + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	rec := get(t, s, "/api/logs")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), line) {
+		t.Fatalf("logs %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/logs", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post %d", rec.Code)
+	}
+}

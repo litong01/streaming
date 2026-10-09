@@ -25,9 +25,11 @@
       padding: 24px;
       -webkit-font-smoothing: antialiased;
     }
-    .panel { width: min(640px, 100%); margin: 0 auto; }
+    .panel { width: min(860px, 100%); margin: 0 auto; }
     h1 { font-size: 32px; font-weight: 300; letter-spacing: -0.02em; margin: 0 0 8px; }
-    .hint { color: var(--muted); margin-bottom: 28px; line-height: 1.5; }
+    h2 { font-size: 20px; font-weight: 400; margin: 36px 0 8px; }
+    .hint { color: var(--muted); margin: 0 0 28px; line-height: 1.5; }
+    .log .hint { margin-bottom: 12px; }
     nav { display: grid; gap: 12px; }
     a {
       display: flex;
@@ -40,6 +42,19 @@
       text-decoration: none;
       font-size: 18px;
     }
+    #logView {
+      margin: 0;
+      max-height: 420px;
+      overflow: auto;
+      padding: 16px;
+      border-radius: 16px;
+      border: 1px solid var(--ring);
+      background: rgba(0, 0, 0, 0.35);
+      color: var(--text);
+      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
   </style>
 </head>
 <body>
@@ -50,6 +65,31 @@
       <a href="/config/streaming">Streaming</a>
       <a href="/config/av">AV system control</a>
     </nav>
+    <section class="log">
+      <h2>Log</h2>
+      <p class="hint">Streaming and AV control write here. This view updates on its own.</p>
+      <pre id="logView">Loading…</pre>
+    </section>
   </main>
+  <script>
+    const logView = document.getElementById("logView");
+
+    async function refreshLog() {
+      const nearBottom = logView.scrollHeight - logView.scrollTop - logView.clientHeight < 24;
+      try {
+        const response = await fetch("/api/logs");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not load the log");
+        const lines = data.lines || [];
+        logView.textContent = lines.length ? lines.join("\n") : "No log lines yet.";
+      } catch (error) {
+        logView.textContent = String(error.message || error);
+      }
+      if (nearBottom) logView.scrollTop = logView.scrollHeight;
+    }
+
+    refreshLog();
+    setInterval(refreshLog, 2000);
+  </script>
 </body>
 </html>

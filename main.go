@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 
 	"streaming/internal/avcontrol"
 	"streaming/internal/config"
+	"streaming/internal/logbuf"
 	"streaming/internal/server"
 	"streaming/internal/smp"
 )
@@ -21,6 +23,7 @@ import (
 var webFS embed.FS
 
 func main() {
+	log.SetOutput(io.MultiWriter(os.Stderr, logbuf.Writer()))
 	path, err := config.Path()
 	if err != nil {
 		log.Fatal(err)

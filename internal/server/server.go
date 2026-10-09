@@ -15,6 +15,7 @@ import (
 	"streaming/internal/autovolume"
 	"streaming/internal/avcontrol"
 	"streaming/internal/config"
+	"streaming/internal/logbuf"
 	"streaming/internal/smp"
 )
 
@@ -175,6 +176,7 @@ func (s *Server) mux() *http.ServeMux {
 	mux.HandleFunc("/config/av", s.handleAVConfigPage)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfigAPI)
+	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/api/config/test", s.handleConfigTest)
 	mux.HandleFunc("/api/preview", s.handlePreview)
 	mux.HandleFunc("/api/audio", s.handleAudio)
@@ -254,6 +256,14 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeHTML(w, s.pages.Control)
+}
+
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"lines": logbuf.Lines()})
 }
 
 func (s *Server) handleConfigIndex(w http.ResponseWriter, r *http.Request) {
