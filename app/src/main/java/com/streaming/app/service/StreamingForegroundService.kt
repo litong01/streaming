@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.net.wifi.WifiManager
 import androidx.core.app.NotificationCompat
 import com.streaming.app.MainActivity
 import com.streaming.app.R
@@ -27,10 +28,12 @@ class StreamingForegroundService : Service() {
     @Volatile
     private var stopping = false
     private var notificationPort = 0
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        acquireMulticastLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -54,10 +57,28 @@ class StreamingForegroundService : Service() {
         if (process != null && process.isAlive) {
             process.destroyForcibly()
         }
+        multicastLock?.let { lock ->
+            if (lock.isHeld) lock.release()
+        }
+        multicastLock = null
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun acquireMulticastLock() {
+        try {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            multicastLock = wifi.createMulticastLock("$TAG-tuya-discovery").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (error: Exception) {
+            // TCP subnet verification still works if a device or ROM refuses
+            // the lock, but recording this makes that degradation visible.
+            Log.w(TAG, "Could not enable Wi-Fi device discovery", error)
+        }
+    }
 
     @Synchronized
     private fun startGoServer() {

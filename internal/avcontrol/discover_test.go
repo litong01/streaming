@@ -85,6 +85,23 @@ func TestMergeUsesTheLanAddress(t *testing.T) {
 	}
 }
 
+func TestSavedAddressBecomesAVerifiedCandidate(t *testing.T) {
+	file := &File{Switches: []Switch{
+		{DeviceID: "dev-1", IP: "192.168.1.44"},
+		{DeviceID: "dev-2", IP: "8.8.8.8"},
+	}}
+	devices := addSavedCandidates(file, []catalogDevice{
+		{id: "dev-1", candidate: "192.168.1.20"},
+		{id: "dev-2"},
+	})
+	if devices[0].candidate != "192.168.1.44" || devices[0].onNetwork {
+		t.Fatalf("saved candidate %#v", devices[0])
+	}
+	if devices[1].candidate != "" {
+		t.Fatalf("public candidate %#v", devices[1])
+	}
+}
+
 func TestReplyMustBelongToTheDevice(t *testing.T) {
 	if !replyMatchesDevice([]byte(`{"dps":{"1":true}}`), "dev-1") {
 		t.Fatal("status reply was rejected")

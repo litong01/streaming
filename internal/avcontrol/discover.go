@@ -134,6 +134,7 @@ func (c *Controller) Discover(ctx context.Context, edit ConfigEdit) (DiscoverRep
 	}
 	lan := <-lanCh
 	merged := mergeCatalog(listed, lan)
+	merged = addSavedCandidates(file, merged)
 	if sweep {
 		merged = fillFromNetwork(ctx, merged)
 	}
@@ -311,6 +312,28 @@ func lanIP(value string) string {
 	return ip.To4().String()
 }
 
+// addSavedCandidates makes rescans resilient to platforms that filter Tuya's
+// UDP broadcasts. The address is still verified with the current cloud key;
+// a stale DHCP lease is never reported merely because it was saved.
+func addSavedCandidates(file *File, devices []catalogDevice) []catalogDevice {
+	if file == nil {
+		return devices
+	}
+	saved := make(map[string]string, len(file.Switches))
+	for _, sw := range file.Switches {
+		id := strings.TrimSpace(sw.DeviceID)
+		if ip := lanIP(sw.IP); id != "" && ip != "" {
+			saved[id] = ip
+		}
+	}
+	for i := range devices {
+		if ip := saved[devices[i].id]; ip != "" {
+			devices[i].candidate = ip
+		}
+	}
+	return devices
+}
+
 func fillFromNetwork(ctx context.Context, devices []catalogDevice) []catalogDevice {
 	var pending []int
 	for i := range devices {
@@ -350,10 +373,15 @@ func fillFromNetwork(ctx context.Context, devices []catalogDevice) []catalogDevi
 	}
 	// Every open port is tried until the scan deadline. A fixed prefix of the
 	// sorted list previously hid the Ethernet LAN behind another subnet.
-	open := probePort(ctx, subnetHosts(claimed))
+	hosts := subnetHosts(claimed)
+	open := probePort(ctx, hosts)
+	log.Printf("av control: LAN scan checked %d addresses, %d Tuya ports answered", len(hosts), len(open))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4)
+	// Hosts are independent. Android can make a wrong-key handshake wait for
+	// its timeout, so checking only four hosts at once can consume the entire
+	// scan deadline before a higher address is reached.
+	sem := make(chan struct{}, 16)
 	for _, ip := range open {
 		if ctx.Err() != nil {
 			break
@@ -361,7 +389,11 @@ func fillFromNetwork(ctx context.Context, devices []catalogDevice) []catalogDevi
 		wg.Add(1)
 		go func(ip string) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-sem }()
 			mu.Lock()
 			indexes := append([]int(nil), still...)
@@ -409,7 +441,7 @@ func identifyLocal(ctx context.Context, ip string, device catalogDevice) (string
 		if ctx.Err() != nil {
 			return "", false
 		}
-		attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
+		attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
 		sw := Switch{DeviceID: device.id, IP: ip, LocalKey: device.key, Protocol: version}
 		err := withSession(attempt, sw, version, func(s *lanSession) error {
 			reply, err := s.queryDPS(device.id, "1")
